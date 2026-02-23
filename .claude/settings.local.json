@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:api-dashboard.search.brave.com)",
+      "WebFetch(domain:brave.com)",
+      "WebFetch(domain:docs.piloterr.com)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:platform.openai.com)",
+      "WebFetch(domain:cookbook.openai.com)",
+      "WebFetch(domain:developers.openai.com)",
+      "WebFetch(domain:api.search.brave.com)",
+      "WebFetch(domain:deepwiki.com)",
+      "Bash(git init:*)",
+      "Bash(pip install:*)",
+      "Bash(python -m pytest:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
+    ]
+  }
+}
