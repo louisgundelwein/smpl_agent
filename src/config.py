@@ -14,6 +14,21 @@ class Config:
     openai_model: str
     openai_base_url: str | None
     brave_search_api_key: str
+    agent_host: str
+    agent_port: int
+    telegram_bot_token: str | None
+    telegram_allowed_chat_ids: list[int]
+    embedding_model: str
+    memory_db_path: str
+    soul_path: str
+    shell_command_timeout: int
+    shell_max_output: int
+    context_max_tokens: int
+    context_preserve_recent: int
+    codex_timeout: int
+    codex_max_output: int
+    github_token: str | None
+    history_path: str
 
     @classmethod
     def from_env(cls, env_path: str = ".env") -> "Config":
@@ -28,6 +43,26 @@ class Config:
         brave_key = os.getenv("BRAVE_SEARCH_API_KEY")
         model = os.getenv("OPENAI_MODEL", "gpt-4o")
         base_url = os.getenv("OPENAI_BASE_URL") or None
+        agent_host = os.getenv("AGENT_HOST", "127.0.0.1")
+        agent_port = int(os.getenv("AGENT_PORT", "7600"))
+        telegram_token = os.getenv("TELEGRAM_BOT_TOKEN") or None
+
+        raw_ids = os.getenv("TELEGRAM_ALLOWED_CHAT_IDS", "")
+        telegram_chat_ids = [
+            int(x.strip()) for x in raw_ids.split(",") if x.strip()
+        ]
+
+        embedding_model = os.getenv("EMBEDDING_MODEL", "text-embedding-3-large")
+        memory_db_path = os.getenv("MEMORY_DB_PATH", "agent_memory.db")
+        soul_path = os.getenv("SOUL_PATH", "SOUL.md")
+        shell_command_timeout = int(os.getenv("SHELL_COMMAND_TIMEOUT", "30"))
+        shell_max_output = int(os.getenv("SHELL_MAX_OUTPUT", "50000"))
+        context_max_tokens = int(os.getenv("CONTEXT_MAX_TOKENS", "100000"))
+        context_preserve_recent = int(os.getenv("CONTEXT_PRESERVE_RECENT", "10"))
+        codex_timeout = int(os.getenv("CODEX_TIMEOUT", "300"))
+        codex_max_output = int(os.getenv("CODEX_MAX_OUTPUT", "50000"))
+        github_token = os.getenv("GITHUB_TOKEN") or None
+        history_path = os.getenv("HISTORY_PATH", "conversation_history.json")
 
         if not openai_key:
             raise ValueError("OPENAI_API_KEY is required")
@@ -39,4 +74,19 @@ class Config:
             openai_model=model,
             openai_base_url=base_url,
             brave_search_api_key=brave_key,
+            agent_host=agent_host,
+            agent_port=agent_port,
+            telegram_bot_token=telegram_token,
+            telegram_allowed_chat_ids=telegram_chat_ids,
+            embedding_model=embedding_model,
+            memory_db_path=memory_db_path,
+            soul_path=soul_path,
+            shell_command_timeout=shell_command_timeout,
+            shell_max_output=shell_max_output,
+            context_max_tokens=context_max_tokens,
+            context_preserve_recent=context_preserve_recent,
+            codex_timeout=codex_timeout,
+            codex_max_output=codex_max_output,
+            github_token=github_token,
+            history_path=history_path,
         )

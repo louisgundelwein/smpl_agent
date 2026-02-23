@@ -14,7 +14,11 @@
       "Bash(pip install:*)",
       "Bash(python -m pytest:*)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "WebFetch(domain:core.telegram.org)",
+      "Bash(git push:*)",
+      "WebFetch(domain:openclawsoul.org)",
+      "Bash(del \"C:\\\\Users\\\\louis\\\\Desktop\\\\Agent\\\\src\\\\tools\\\\claude_code.py\")"
     ]
   }
 }

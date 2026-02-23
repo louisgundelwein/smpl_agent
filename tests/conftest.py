@@ -43,6 +43,21 @@ def mock_config():
         openai_model="gpt-4o",
         openai_base_url=None,
         brave_search_api_key="test-brave-key",
+        agent_host="127.0.0.1",
+        agent_port=0,
+        telegram_bot_token=None,
+        telegram_allowed_chat_ids=[],
+        embedding_model="text-embedding-3-large",
+        memory_db_path=":memory:",
+        soul_path="SOUL.md",
+        shell_command_timeout=30,
+        shell_max_output=50000,
+        context_max_tokens=100000,
+        context_preserve_recent=10,
+        codex_timeout=300,
+        codex_max_output=50000,
+        github_token="test-github-token",
+        history_path="test_history.json",
     )
 
 
