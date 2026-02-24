@@ -23,12 +23,15 @@ class TelegramBot:
         self,
         token: str,
         allowed_chat_ids: list[int] | None = None,
+        transcriber: Any = None,
     ) -> None:
         self._token = token
         self._allowed_chat_ids = set(allowed_chat_ids) if allowed_chat_ids else set()
         self._base_url = BASE_URL.format(token=token)
+        self._file_base_url = f"https://api.telegram.org/file/bot{token}"
         self._offset = 0
         self._bot_name: str | None = None
+        self._transcriber = transcriber
 
     def verify(self) -> str:
         """Call getMe to verify the token works. Returns the bot username.
@@ -69,6 +72,71 @@ class TelegramBot:
             return True
         return chat_id in self._allowed_chat_ids
 
+    def _download_file(self, file_id: str) -> bytes:
+        """Download a file from Telegram servers by file_id.
+
+        Two-step: getFile to obtain the path, then download the content.
+        """
+        data = self._api("getFile", file_id=file_id)
+        file_path = data["result"]["file_path"]
+        url = f"{self._file_base_url}/{file_path}"
+        resp = httpx.get(url, timeout=60.0)
+        resp.raise_for_status()
+        return resp.content
+
+    def _handle_voice(
+        self,
+        message: dict[str, Any],
+        chat_id: int,
+        agent: Any,
+        agent_lock: threading.Lock,
+    ) -> None:
+        """Handle a voice message: download, transcribe, pass to agent."""
+        if not self._transcriber:
+            self._send_message(chat_id, "Voice messages are not supported (transcription not configured).")
+            return
+
+        voice = message["voice"]
+        file_id = voice["file_id"]
+        duration = voice.get("duration", "?")
+
+        print(f"  [telegram] voice message from chat {chat_id} ({duration}s)")
+
+        try:
+            audio_bytes = self._download_file(file_id)
+        except Exception as exc:
+            print(f"  [telegram] failed to download voice: {exc}")
+            self._send_message(chat_id, "Failed to download voice message.")
+            return
+
+        try:
+            text = self._transcriber.transcribe(audio_bytes)
+        except Exception as exc:
+            print(f"  [telegram] transcription error: {exc}")
+            self._send_message(chat_id, f"Transcription failed: {exc}")
+            return
+
+        if not text.strip():
+            self._send_message(chat_id, "Could not transcribe any speech from the voice message.")
+            return
+
+        print(f"  [telegram] transcribed: {text[:80]}")
+        self._send_typing(chat_id)
+
+        prefixed_text = f"[Voice message transcription]: {text}"
+
+        agent_lock.acquire()
+        try:
+            response = agent.run(prefixed_text)
+        except Exception as exc:
+            response = f"Error: {exc}"
+            print(f"  [telegram] agent error: {exc}")
+        finally:
+            agent_lock.release()
+
+        self._send_message(chat_id, response)
+        print(f"  [telegram] replied to chat {chat_id}")
+
     def poll_loop(self, agent: Any, agent_lock: threading.Lock) -> None:
         """Long-polling loop — runs in a daemon thread.
 
@@ -96,14 +164,18 @@ class TelegramBot:
                     if not message:
                         continue
 
-                    text = message.get("text", "").strip()
                     chat_id = message["chat"]["id"]
-
-                    if not text:
-                        continue
 
                     if not self._is_allowed(chat_id):
                         print(f"  [telegram] ignored message from chat {chat_id} (not in allowed list)")
+                        continue
+
+                    if message.get("voice"):
+                        self._handle_voice(message, chat_id, agent, agent_lock)
+                        continue
+
+                    text = message.get("text", "").strip()
+                    if not text:
                         continue
 
                     print(f"  [telegram] message from chat {chat_id}: {text[:80]}")

@@ -185,3 +185,95 @@ def test_verify_invalid_token():
     )
     with pytest.raises(httpx.HTTPStatusError):
         bot.verify()
+
+
+# --- Voice message tests ---
+
+FILE_BASE = f"https://api.telegram.org/file/bot{TOKEN}"
+
+
+def _make_voice_update(update_id, chat_id, file_id="voice_file_123", duration=5):
+    return {
+        "update_id": update_id,
+        "message": {
+            "message_id": update_id,
+            "chat": {"id": chat_id},
+            "voice": {
+                "file_id": file_id,
+                "duration": duration,
+                "mime_type": "audio/ogg",
+            },
+        },
+    }
+
+
+@respx.mock
+def test_voice_message_transcribed_and_sent():
+    """Voice message is downloaded, transcribed, and response sent."""
+    transcriber = MagicMock()
+    transcriber.transcribe.return_value = "hello from voice"
+
+    bot = TelegramBot(token=TOKEN, transcriber=transcriber)
+    agent = MagicMock()
+    agent.run.return_value = "I heard you"
+    lock = threading.Lock()
+
+    # Mock getFile API
+    respx.get(f"{BASE}/getFile").mock(
+        return_value=httpx.Response(200, json={
+            "ok": True,
+            "result": {"file_path": "voice/file_0.ogg"},
+        })
+    )
+    # Mock file download
+    respx.get(f"{FILE_BASE}/voice/file_0.ogg").mock(
+        return_value=httpx.Response(200, content=b"fake-ogg-bytes")
+    )
+    send_route = respx.post(f"{BASE}/sendMessage").mock(
+        return_value=httpx.Response(200, json={"ok": True})
+    )
+    respx.post(f"{BASE}/sendChatAction").mock(
+        return_value=httpx.Response(200, json={"ok": True})
+    )
+
+    updates = {"ok": True, "result": [_make_voice_update(100, 42)]}
+    _run_one_poll(bot, agent, lock, updates)
+
+    transcriber.transcribe.assert_called_once_with(b"fake-ogg-bytes")
+    agent.run.assert_called_once_with("[Voice message transcription]: hello from voice")
+    assert send_route.called
+
+
+@respx.mock
+def test_voice_without_transcriber_sends_error():
+    """When no transcriber is configured, voice messages get an error reply."""
+    bot = TelegramBot(token=TOKEN)  # No transcriber
+    agent = MagicMock()
+    lock = threading.Lock()
+
+    send_route = respx.post(f"{BASE}/sendMessage").mock(
+        return_value=httpx.Response(200, json={"ok": True})
+    )
+
+    updates = {"ok": True, "result": [_make_voice_update(100, 42)]}
+    _run_one_poll(bot, agent, lock, updates)
+
+    agent.run.assert_not_called()
+    assert send_route.called
+    body = send_route.calls[0].request.content
+    assert b"not supported" in body
+
+
+@respx.mock
+def test_voice_from_unauthorized_chat_ignored():
+    """Voice messages from unauthorized chats are ignored."""
+    transcriber = MagicMock()
+    bot = TelegramBot(token=TOKEN, allowed_chat_ids=[42], transcriber=transcriber)
+    agent = MagicMock()
+    lock = threading.Lock()
+
+    updates = {"ok": True, "result": [_make_voice_update(100, 999)]}
+    _run_one_poll(bot, agent, lock, updates)
+
+    transcriber.transcribe.assert_not_called()
+    agent.run.assert_not_called()

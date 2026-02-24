@@ -147,14 +147,18 @@ def serve(config: Config) -> None:
     """Start the agent daemon server."""
     from src.server import AgentServer
     from src.telegram import TelegramBot
+    from src.transcription import Transcriber
 
     agent = create_agent(config)
+    agent.emitter.on(_print_event)
 
     telegram_bot = None
     if config.telegram_bot_token:
+        transcriber = Transcriber(model_name=config.whisper_model)
         telegram_bot = TelegramBot(
             token=config.telegram_bot_token,
             allowed_chat_ids=config.telegram_allowed_chat_ids,
+            transcriber=transcriber,
         )
         try:
             bot_name = telegram_bot.verify()

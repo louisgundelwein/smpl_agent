@@ -19,7 +19,8 @@ Terminal-based AI agent with OpenAI-compatible LLM integration and agentic tool 
   - `protocol.py` - JSON-lines TCP protocol for daemon mode
   - `server.py` - Daemon TCP server
   - `client.py` - Attach client
-  - `telegram.py` - Telegram bot (long polling)
+  - `telegram.py` - Telegram bot (long polling, voice message support)
+  - `transcription.py` - Whisper speech-to-text (lazy dependency install, lazy model load)
   - `tools/` - Tool system
     - `base.py` - Abstract `Tool` base class (the contract every tool must follow)
     - `registry.py` - `ToolRegistry`: registers tools, provides schemas to LLM, dispatches calls
@@ -73,6 +74,12 @@ All configuration comes from `.env` (never committed). See `.env.example` for th
 
 ### History
 - `HISTORY_PATH` -- Path to conversation history file (default: `conversation_history.json`)
+
+### Whisper Transcription
+- `WHISPER_MODEL` -- HuggingFace model ID (default: `openai/whisper-large-v3-turbo`)
+- Dependencies (`torch`, `transformers`, `accelerate`, `imageio-ffmpeg`) are auto-installed on first voice message
+- Pre-install with `pip install -e ".[transcription]"` to avoid first-use delay
+- Audio decoding uses `imageio-ffmpeg` bundled binary (no system ffmpeg install needed)
 
 ---
 

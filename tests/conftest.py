@@ -58,6 +58,7 @@ def mock_config():
         codex_max_output=50000,
         github_token="test-github-token",
         history_path="test_history.json",
+        whisper_model="openai/whisper-large-v3-turbo",
     )
 
 

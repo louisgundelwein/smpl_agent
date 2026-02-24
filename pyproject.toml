@@ -16,6 +16,12 @@ dev = [
     "pytest-mock>=3.12",
     "respx>=0.22",
 ]
+transcription = [
+    "torch>=2.0",
+    "transformers>=4.36",
+    "accelerate>=0.25",
+    "imageio-ffmpeg>=0.4",
+]
 
 [project.scripts]
 agent = "src.main:main"
