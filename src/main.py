@@ -145,6 +145,8 @@ def repl(agent: Agent) -> None:
 
 def serve(config: Config) -> None:
     """Start the agent daemon server."""
+    import signal as _signal
+
     from src.server import AgentServer
     from src.telegram import TelegramBot
     from src.transcription import Transcriber
@@ -173,6 +175,12 @@ def serve(config: Config) -> None:
         port=config.agent_port,
         telegram_bot=telegram_bot,
     )
+
+    if sys.platform != "win32":
+        def _handle_sigterm(signum, frame):
+            server.shutdown()
+        _signal.signal(_signal.SIGTERM, _handle_sigterm)
+
     server.serve_forever()
 
 
@@ -195,6 +203,44 @@ def attach(config: Config) -> None:
         sys.exit(1)
 
 
+def start(config: Config) -> None:
+    """Start the agent server as a detached background process."""
+    from src.daemon import start_daemon
+
+    try:
+        pid = start_daemon(config.daemon_pid_path, config.daemon_log_path)
+    except RuntimeError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Agent started in background (PID {pid}).")
+    print(f"  Log: {config.daemon_log_path}")
+    print(f"  PID file: {config.daemon_pid_path}")
+    print(f"  Attach with: python -m src.main attach")
+    print(f"  Stop with: python -m src.main stop")
+
+
+def stop(config: Config) -> None:
+    """Stop the background agent server."""
+    from src.daemon import stop_daemon
+
+    try:
+        pid = stop_daemon(config.daemon_pid_path)
+    except RuntimeError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Agent stopped (PID {pid}).")
+
+
+def status(config: Config) -> None:
+    """Check the status of the background agent server."""
+    from src.daemon import daemon_status
+
+    message, _pid = daemon_status(config.daemon_pid_path)
+    print(message)
+
+
 def main() -> None:
     """CLI entry point with subcommands."""
     parser = argparse.ArgumentParser(
@@ -204,6 +250,9 @@ def main() -> None:
     subparsers = parser.add_subparsers(dest="command")
     subparsers.add_parser("serve", help="Start the agent daemon server")
     subparsers.add_parser("attach", help="Connect to a running agent server")
+    subparsers.add_parser("start", help="Start the agent server in the background")
+    subparsers.add_parser("stop", help="Stop the background agent server")
+    subparsers.add_parser("status", help="Check if the agent server is running")
 
     args = parser.parse_args()
 
@@ -217,6 +266,12 @@ def main() -> None:
         serve(config)
     elif args.command == "attach":
         attach(config)
+    elif args.command == "start":
+        start(config)
+    elif args.command == "stop":
+        stop(config)
+    elif args.command == "status":
+        status(config)
     else:
         agent = create_agent(config)
         repl(agent)

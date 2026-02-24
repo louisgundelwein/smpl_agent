@@ -376,3 +376,43 @@ def test_custom_whisper_model(monkeypatch):
     config = Config.from_env(env_path="/dev/null")
 
     assert config.whisper_model == "openai/whisper-small"
+
+
+def test_default_daemon_pid_path(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "BSA-test")
+    monkeypatch.delenv("DAEMON_PID_PATH", raising=False)
+
+    config = Config.from_env(env_path="/dev/null")
+
+    assert config.daemon_pid_path == "agent.pid"
+
+
+def test_custom_daemon_pid_path(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "BSA-test")
+    monkeypatch.setenv("DAEMON_PID_PATH", "/var/run/agent.pid")
+
+    config = Config.from_env(env_path="/dev/null")
+
+    assert config.daemon_pid_path == "/var/run/agent.pid"
+
+
+def test_default_daemon_log_path(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "BSA-test")
+    monkeypatch.delenv("DAEMON_LOG_PATH", raising=False)
+
+    config = Config.from_env(env_path="/dev/null")
+
+    assert config.daemon_log_path == "agent.log"
+
+
+def test_custom_daemon_log_path(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "BSA-test")
+    monkeypatch.setenv("DAEMON_LOG_PATH", "/var/log/agent.log")
+
+    config = Config.from_env(env_path="/dev/null")
+
+    assert config.daemon_log_path == "/var/log/agent.log"

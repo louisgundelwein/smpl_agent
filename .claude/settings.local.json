@@ -18,7 +18,9 @@
       "WebFetch(domain:core.telegram.org)",
       "Bash(git push:*)",
       "WebFetch(domain:openclawsoul.org)",
-      "Bash(del \"C:\\\\Users\\\\louis\\\\Desktop\\\\Agent\\\\src\\\\tools\\\\claude_code.py\")"
+      "Bash(del \"C:\\\\Users\\\\louis\\\\Desktop\\\\Agent\\\\src\\\\tools\\\\claude_code.py\")",
+      "Bash(git rebase:*)",
+      "Bash(GIT_EDITOR=true git rebase:*)"
     ]
   }
 }

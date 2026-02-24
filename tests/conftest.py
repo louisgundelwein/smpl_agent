@@ -59,6 +59,8 @@ def mock_config():
         github_token="test-github-token",
         history_path="test_history.json",
         whisper_model="openai/whisper-large-v3-turbo",
+        daemon_pid_path="test_agent.pid",
+        daemon_log_path="test_agent.log",
     )
 
 

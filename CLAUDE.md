@@ -19,6 +19,7 @@ Terminal-based AI agent with OpenAI-compatible LLM integration and agentic tool 
   - `protocol.py` - JSON-lines TCP protocol for daemon mode
   - `server.py` - Daemon TCP server
   - `client.py` - Attach client
+  - `daemon.py` - Background daemon lifecycle (start, stop, status, PID management)
   - `telegram.py` - Telegram bot (long polling, voice message support)
   - `transcription.py` - Whisper speech-to-text (lazy dependency install, lazy model load)
   - `tools/` - Tool system
@@ -35,6 +36,9 @@ Terminal-based AI agent with OpenAI-compatible LLM integration and agentic tool 
 
 - Install: `pip install -e ".[dev]"`
 - Run: `python -m src.main`
+- Start background: `python -m src.main start`
+- Stop background: `python -m src.main stop`
+- Check status: `python -m src.main status`
 - Test all: `pytest tests/ -v`
 - Test single file: `pytest tests/test_agent.py -v`
 
@@ -80,6 +84,10 @@ All configuration comes from `.env` (never committed). See `.env.example` for th
 - Dependencies (`torch`, `transformers`, `accelerate`, `imageio-ffmpeg`) are auto-installed on first voice message
 - Pre-install with `pip install -e ".[transcription]"` to avoid first-use delay
 - Audio decoding uses `imageio-ffmpeg` bundled binary (no system ffmpeg install needed)
+
+### Daemon
+- `DAEMON_PID_PATH` -- PID file location (default: `agent.pid`)
+- `DAEMON_LOG_PATH` -- Log file location (default: `agent.log`)
 
 ---
 

@@ -7,3 +7,5 @@ dist/
 .venv/
 *.db
 conversation_history.json
+agent.pid
+agent.log

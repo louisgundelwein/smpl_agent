@@ -30,6 +30,8 @@ class Config:
     github_token: str | None
     history_path: str
     whisper_model: str
+    daemon_pid_path: str
+    daemon_log_path: str
 
     @classmethod
     def from_env(cls, env_path: str = ".env") -> "Config":
@@ -65,6 +67,8 @@ class Config:
         github_token = os.getenv("GITHUB_TOKEN") or None
         history_path = os.getenv("HISTORY_PATH", "conversation_history.json")
         whisper_model = os.getenv("WHISPER_MODEL", "openai/whisper-large-v3-turbo")
+        daemon_pid_path = os.getenv("DAEMON_PID_PATH", "agent.pid")
+        daemon_log_path = os.getenv("DAEMON_LOG_PATH", "agent.log")
 
         if not openai_key:
             raise ValueError("OPENAI_API_KEY is required")
@@ -92,4 +96,6 @@ class Config:
             github_token=github_token,
             history_path=history_path,
             whisper_model=whisper_model,
+            daemon_pid_path=daemon_pid_path,
+            daemon_log_path=daemon_log_path,
         )
