@@ -356,3 +356,23 @@ def test_custom_history_path(monkeypatch):
     config = Config.from_env(env_path="/dev/null")
 
     assert config.history_path == "/tmp/my_history.json"
+
+
+def test_default_whisper_model(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "BSA-test")
+    monkeypatch.delenv("WHISPER_MODEL", raising=False)
+
+    config = Config.from_env(env_path="/dev/null")
+
+    assert config.whisper_model == "openai/whisper-large-v3-turbo"
+
+
+def test_custom_whisper_model(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "BSA-test")
+    monkeypatch.setenv("WHISPER_MODEL", "openai/whisper-small")
+
+    config = Config.from_env(env_path="/dev/null")
+
+    assert config.whisper_model == "openai/whisper-small"
