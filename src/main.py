@@ -110,6 +110,7 @@ def create_agent(config: Config) -> Agent:
         system_prompt=system_prompt,
         context_manager=context_manager,
         history=history,
+        max_tool_rounds=config.max_tool_rounds,
     )
 
 

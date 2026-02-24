@@ -30,6 +30,7 @@ class Config:
     github_token: str | None
     history_path: str
     whisper_model: str
+    max_tool_rounds: int
     daemon_pid_path: str
     daemon_log_path: str
 
@@ -67,6 +68,7 @@ class Config:
         github_token = os.getenv("GITHUB_TOKEN") or None
         history_path = os.getenv("HISTORY_PATH", "conversation_history.json")
         whisper_model = os.getenv("WHISPER_MODEL", "openai/whisper-large-v3-turbo")
+        max_tool_rounds = int(os.getenv("MAX_TOOL_ROUNDS", "25"))
         daemon_pid_path = os.getenv("DAEMON_PID_PATH", "agent.pid")
         daemon_log_path = os.getenv("DAEMON_LOG_PATH", "agent.log")
 
@@ -96,6 +98,7 @@ class Config:
             github_token=github_token,
             history_path=history_path,
             whisper_model=whisper_model,
+            max_tool_rounds=max_tool_rounds,
             daemon_pid_path=daemon_pid_path,
             daemon_log_path=daemon_log_path,
         )
