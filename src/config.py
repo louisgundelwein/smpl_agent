@@ -33,6 +33,10 @@ class Config:
     max_tool_rounds: int
     daemon_pid_path: str
     daemon_log_path: str
+    scheduler_db_path: str
+    scheduler_poll_interval: int
+    scheduler_tasks: str
+    repos_db_path: str
 
     @classmethod
     def from_env(cls, env_path: str = ".env") -> "Config":
@@ -71,6 +75,10 @@ class Config:
         max_tool_rounds = int(os.getenv("MAX_TOOL_ROUNDS", "25"))
         daemon_pid_path = os.getenv("DAEMON_PID_PATH", "agent.pid")
         daemon_log_path = os.getenv("DAEMON_LOG_PATH", "agent.log")
+        scheduler_db_path = os.getenv("SCHEDULER_DB_PATH", "scheduler.db")
+        scheduler_poll_interval = int(os.getenv("SCHEDULER_POLL_INTERVAL", "30"))
+        scheduler_tasks = os.getenv("SCHEDULER_TASKS", "")
+        repos_db_path = os.getenv("REPOS_DB_PATH", "repos.db")
 
         if not openai_key:
             raise ValueError("OPENAI_API_KEY is required")
@@ -101,4 +109,8 @@ class Config:
             max_tool_rounds=max_tool_rounds,
             daemon_pid_path=daemon_pid_path,
             daemon_log_path=daemon_log_path,
+            scheduler_db_path=scheduler_db_path,
+            scheduler_poll_interval=scheduler_poll_interval,
+            scheduler_tasks=scheduler_tasks,
+            repos_db_path=repos_db_path,
         )

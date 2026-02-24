@@ -22,6 +22,8 @@ Terminal-based AI agent with OpenAI-compatible LLM integration and agentic tool 
   - `daemon.py` - Background daemon lifecycle (start, stop, status, PID management)
   - `telegram.py` - Telegram bot (long polling, voice message support)
   - `transcription.py` - Whisper speech-to-text (lazy dependency install, lazy model load)
+  - `scheduler.py` - Scheduled task engine (SQLite persistence, cron parsing, polling loop)
+  - `repos.py` - Repository registry (SQLite persistence, tracks known repos)
   - `tools/` - Tool system
     - `base.py` - Abstract `Tool` base class (the contract every tool must follow)
     - `registry.py` - `ToolRegistry`: registers tools, provides schemas to LLM, dispatches calls
@@ -30,6 +32,8 @@ Terminal-based AI agent with OpenAI-compatible LLM integration and agentic tool 
     - `shell.py` - Shell command execution tool
     - `codex.py` - Codex CLI integration (delegates coding tasks)
     - `github.py` - GitHub REST API integration
+    - `scheduler.py` - Scheduler tool (create, list, delete, enable, disable scheduled tasks)
+    - `repos.py` - Repos tool (add, list, remove, get, update known repositories)
 - `tests/` - pytest test suite mirroring `src/` structure
 
 ## Commands
@@ -84,6 +88,15 @@ All configuration comes from `.env` (never committed). See `.env.example` for th
 - Dependencies (`torch`, `transformers`, `accelerate`, `imageio-ffmpeg`) are auto-installed on first voice message
 - Pre-install with `pip install -e ".[transcription]"` to avoid first-use delay
 - Audio decoding uses `imageio-ffmpeg` bundled binary (no system ffmpeg install needed)
+
+### Scheduler (Recurring Tasks)
+- `SCHEDULER_DB_PATH` -- SQLite database path (default: `scheduler.db`)
+- `SCHEDULER_POLL_INTERVAL` -- Seconds between scheduler polls (default: `30`)
+- `SCHEDULER_TASKS` -- Static tasks as JSON array, loaded on startup via upsert (default: empty)
+  - Format: `[{"name":"daily-prs","prompt":"Check open PRs","schedule":"0 9 * * *","deliver_to":"telegram","telegram_chat_id":12345}]`
+
+### Repository Registry
+- `REPOS_DB_PATH` -- SQLite database path (default: `repos.db`)
 
 ### Daemon
 - `DAEMON_PID_PATH` -- PID file location (default: `agent.pid`)

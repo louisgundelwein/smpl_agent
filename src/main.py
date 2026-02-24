@@ -15,7 +15,18 @@ from src.formatting import format_event
 from src.embeddings import EmbeddingClient
 from src.llm import LLMClient
 from src.memory import MemoryStore
-from src.tools import BraveSearchTool, CodexTool, GitHubTool, MemoryTool, ShellTool, ToolRegistry
+from src.repos import RepoStore
+from src.scheduler import Scheduler, SchedulerStore
+from src.tools import (
+    BraveSearchTool,
+    CodexTool,
+    GitHubTool,
+    MemoryTool,
+    ReposTool,
+    SchedulerTool,
+    ShellTool,
+    ToolRegistry,
+)
 
 
 def _print_event(event: AgentEvent) -> None:
@@ -62,7 +73,28 @@ def _build_system_context() -> str:
     )
 
 
-def create_agent(config: Config) -> Agent:
+def _build_repo_context(repo_store: RepoStore) -> str:
+    """Build a markdown list of known repos for the system prompt."""
+    repos = repo_store.list_all()
+    if not repos:
+        return ""
+
+    lines = ["\n\n## Known Repositories\n"]
+    for repo in repos:
+        tags = f" [{', '.join(repo['tags'])}]" if repo.get("tags") else ""
+        desc = f" — {repo['description']}" if repo.get("description") else ""
+        lines.append(
+            f"- **{repo['name']}**: `{repo['owner']}/{repo['repo']}` "
+            f"(branch: `{repo['default_branch']}`, url: `{repo['url']}`){desc}{tags}"
+        )
+    return "\n".join(lines)
+
+
+def create_agent(
+    config: Config,
+    scheduler_store: SchedulerStore | None = None,
+    repo_store: RepoStore | None = None,
+) -> Agent:
     """Wire up all components and return a configured Agent."""
     llm = LLMClient(
         api_key=config.openai_api_key,
@@ -97,13 +129,22 @@ def create_agent(config: Config) -> Agent:
             token=config.github_token,
             max_output=config.shell_max_output,
         ))
+    if scheduler_store:
+        registry.register(SchedulerTool(store=scheduler_store))
+    if repo_store:
+        registry.register(ReposTool(store=repo_store))
+
     context_manager = ContextManager(
         llm=llm,
         max_tokens=config.context_max_tokens,
         preserve_recent=config.context_preserve_recent,
     )
     history = ConversationHistory(config.history_path)
+
     system_prompt = _load_system_prompt(config.soul_path) + _build_system_context()
+    if repo_store:
+        system_prompt += _build_repo_context(repo_store)
+
     return Agent(
         llm=llm,
         registry=registry,
@@ -144,6 +185,37 @@ def repl(agent: Agent) -> None:
             print(f"\nError: {exc}\n", file=sys.stderr)
 
 
+def _load_static_tasks(scheduler_store: SchedulerStore, raw: str) -> None:
+    """Load static scheduler tasks from SCHEDULER_TASKS JSON config.
+
+    Each entry: {"name": ..., "prompt": ..., "schedule": ..., "deliver_to": ..., "telegram_chat_id": ...}
+    Uses upsert to avoid duplicates on restart.
+    """
+    if not raw.strip():
+        return
+    import json
+
+    try:
+        tasks = json.loads(raw)
+    except json.JSONDecodeError:
+        print(f"Warning: SCHEDULER_TASKS is not valid JSON, skipping.", file=sys.stderr)
+        return
+
+    for task in tasks:
+        name = task.get("name")
+        prompt = task.get("prompt")
+        schedule = task.get("schedule")
+        if not all([name, prompt, schedule]):
+            continue
+        scheduler_store.upsert(
+            name=name,
+            prompt=prompt,
+            cron_expression=schedule,
+            deliver_to=task.get("deliver_to", "memory"),
+            telegram_chat_id=task.get("telegram_chat_id"),
+        )
+
+
 def serve(config: Config) -> None:
     """Start the agent daemon server."""
     import signal as _signal
@@ -152,10 +224,22 @@ def serve(config: Config) -> None:
     from src.telegram import TelegramBot
     from src.transcription import Transcriber
 
-    agent = create_agent(config)
+    # Create persistent stores
+    scheduler_store = SchedulerStore(db_path=config.scheduler_db_path)
+    repo_store = RepoStore(db_path=config.repos_db_path)
+
+    # Load static scheduled tasks from config
+    _load_static_tasks(scheduler_store, config.scheduler_tasks)
+
+    agent = create_agent(
+        config,
+        scheduler_store=scheduler_store,
+        repo_store=repo_store,
+    )
     agent.emitter.on(_print_event)
 
     telegram_bot = None
+    telegram_send = None
     if config.telegram_bot_token:
         transcriber = Transcriber(model_name=config.whisper_model)
         telegram_bot = TelegramBot(
@@ -166,15 +250,23 @@ def serve(config: Config) -> None:
         try:
             bot_name = telegram_bot.verify()
             print(f"Telegram bot verified: @{bot_name}")
+            telegram_send = telegram_bot._send_message
         except Exception as exc:
             print(f"Telegram bot token invalid: {exc}", file=sys.stderr)
             sys.exit(1)
+
+    scheduler = Scheduler(
+        store=scheduler_store,
+        telegram_send=telegram_send,
+        poll_interval=config.scheduler_poll_interval,
+    )
 
     server = AgentServer(
         agent=agent,
         host=config.agent_host,
         port=config.agent_port,
         telegram_bot=telegram_bot,
+        scheduler=scheduler,
     )
 
     if sys.platform != "win32":

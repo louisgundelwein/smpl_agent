@@ -184,6 +184,10 @@ class Agent:
         if self._history:
             self._history.save(self._messages)
 
+    def update_system_prompt(self, new_prompt: str) -> None:
+        """Replace the system prompt in the current conversation."""
+        self._messages[0] = {"role": "system", "content": new_prompt}
+
     def reset(self) -> None:
         """Clear conversation history, keeping only the system prompt."""
         self._messages = [self._messages[0]]

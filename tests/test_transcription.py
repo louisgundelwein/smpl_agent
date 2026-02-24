@@ -192,7 +192,7 @@ class TestTranscriber:
 
         assert result == "hello world"
         mock_pipeline_fn.assert_called_once()
-        mock_pipe_instance.assert_called_once_with(fake_decoded)
+        mock_pipe_instance.assert_called_once_with(fake_decoded, return_timestamps=True)
 
     def test_pipeline_loaded_once(self, mocker):
         """Multiple transcribe() calls reuse the same pipeline."""

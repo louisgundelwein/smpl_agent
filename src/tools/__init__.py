@@ -6,6 +6,8 @@ from src.tools.brave_search import BraveSearchTool
 from src.tools.codex import CodexTool
 from src.tools.github import GitHubTool
 from src.tools.memory import MemoryTool
+from src.tools.repos import ReposTool
+from src.tools.scheduler import SchedulerTool
 from src.tools.shell import ShellTool
 
 __all__ = [
@@ -15,5 +17,7 @@ __all__ = [
     "CodexTool",
     "GitHubTool",
     "MemoryTool",
+    "ReposTool",
+    "SchedulerTool",
     "ShellTool",
 ]

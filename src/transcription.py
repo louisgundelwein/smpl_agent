@@ -172,6 +172,6 @@ class Transcriber:
         """
         pipe = self._load_pipeline()
         audio_input = _decode_audio(audio_bytes)
-        result = pipe(audio_input)
+        result = pipe(audio_input, return_timestamps=True)
         text = result.get("text", "").strip() if isinstance(result, dict) else str(result).strip()
         return text

@@ -81,11 +81,13 @@ class AgentServer:
         host: str = "127.0.0.1",
         port: int = 7600,
         telegram_bot: Any = None,
+        scheduler: Any = None,
     ) -> None:
         self._agent = agent
         self._host = host
         self._port = port
         self._telegram_bot = telegram_bot
+        self._scheduler = scheduler
         self._server_socket: socket.socket | None = None
         self._running = False
         self._client_socket: socket.socket | None = None
@@ -221,6 +223,16 @@ class AgentServer:
             )
             telegram_thread.start()
             print("Telegram bot started.")
+
+        # Start scheduler if configured
+        if self._scheduler:
+            scheduler_thread = threading.Thread(
+                target=self._scheduler.poll_loop,
+                args=(self._agent, self._agent_lock),
+                daemon=True,
+            )
+            scheduler_thread.start()
+            print("Scheduler started.")
 
         print("Press Ctrl+C to stop.")
 
