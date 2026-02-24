@@ -1,5 +1,6 @@
 """Tests for src.telegram using respx to mock Telegram API."""
 
+import json
 import threading
 from unittest.mock import MagicMock
 
@@ -67,9 +68,10 @@ def test_poll_and_respond():
 
     agent.run.assert_called_once_with("hi agent")
     assert send_route.called
-    send_call = send_route.calls[0]
-    body = send_call.request.content
-    assert b"Hello from agent!" in body
+    payload = json.loads(send_route.calls[0].request.content)
+    assert payload["text"] == "Hello from agent!"
+    # Bot should reply to the incoming message.
+    assert payload["reply_parameters"] == {"message_id": 100}
 
 
 @respx.mock
@@ -277,3 +279,167 @@ def test_voice_from_unauthorized_chat_ignored():
 
     transcriber.transcribe.assert_not_called()
     agent.run.assert_not_called()
+
+
+# --- Reply context tests ---
+
+
+def _make_reply_update(update_id, chat_id, text, replied_text):
+    """Build an update where the user replies to an earlier message."""
+    return {
+        "update_id": update_id,
+        "message": {
+            "message_id": update_id,
+            "chat": {"id": chat_id},
+            "text": text,
+            "reply_to_message": {
+                "message_id": update_id - 1,
+                "chat": {"id": chat_id},
+                "text": replied_text,
+            },
+        },
+    }
+
+
+@respx.mock
+def test_reply_context_forwarded_to_agent():
+    """When user replies to a message, the agent receives the quoted text as context."""
+    bot = TelegramBot(token=TOKEN)
+    agent = MagicMock()
+    agent.run.return_value = "got it"
+    lock = threading.Lock()
+
+    respx.post(f"{BASE}/sendMessage").mock(
+        return_value=httpx.Response(200, json={"ok": True})
+    )
+    respx.post(f"{BASE}/sendChatAction").mock(
+        return_value=httpx.Response(200, json={"ok": True})
+    )
+
+    updates = {"ok": True, "result": [
+        _make_reply_update(101, 42, "what did you mean?", "The capital of France is Paris."),
+    ]}
+    _run_one_poll(bot, agent, lock, updates)
+
+    agent.run.assert_called_once_with(
+        "[Replying to: The capital of France is Paris.]\n\nwhat did you mean?"
+    )
+
+
+@respx.mock
+def test_no_reply_context_when_no_reply():
+    """A normal message (no reply) is sent to the agent without any prefix."""
+    bot = TelegramBot(token=TOKEN)
+    agent = MagicMock()
+    agent.run.return_value = "ok"
+    lock = threading.Lock()
+
+    respx.post(f"{BASE}/sendMessage").mock(
+        return_value=httpx.Response(200, json={"ok": True})
+    )
+    respx.post(f"{BASE}/sendChatAction").mock(
+        return_value=httpx.Response(200, json={"ok": True})
+    )
+
+    updates = {"ok": True, "result": [_make_update(100, 42, "plain message")]}
+    _run_one_poll(bot, agent, lock, updates)
+
+    agent.run.assert_called_once_with("plain message")
+
+
+@respx.mock
+def test_reply_parameters_in_send_payload():
+    """Bot response includes reply_parameters pointing to the user's message."""
+    bot = TelegramBot(token=TOKEN)
+    agent = MagicMock()
+    agent.run.return_value = "reply"
+    lock = threading.Lock()
+
+    send_route = respx.post(f"{BASE}/sendMessage").mock(
+        return_value=httpx.Response(200, json={"ok": True})
+    )
+    respx.post(f"{BASE}/sendChatAction").mock(
+        return_value=httpx.Response(200, json={"ok": True})
+    )
+
+    updates = {"ok": True, "result": [_make_update(555, 42, "test")]}
+    _run_one_poll(bot, agent, lock, updates)
+
+    payload = json.loads(send_route.calls[0].request.content)
+    assert payload["reply_parameters"] == {"message_id": 555}
+
+
+@respx.mock
+def test_voice_with_reply_context():
+    """Voice message sent as reply includes context from the quoted message."""
+    transcriber = MagicMock()
+    transcriber.transcribe.return_value = "voice text"
+
+    bot = TelegramBot(token=TOKEN, transcriber=transcriber)
+    agent = MagicMock()
+    agent.run.return_value = "understood"
+    lock = threading.Lock()
+
+    voice_update = {
+        "update_id": 200,
+        "message": {
+            "message_id": 200,
+            "chat": {"id": 42},
+            "voice": {"file_id": "vf1", "duration": 3, "mime_type": "audio/ogg"},
+            "reply_to_message": {
+                "message_id": 190,
+                "chat": {"id": 42},
+                "text": "Tell me more about this",
+            },
+        },
+    }
+
+    respx.get(f"{BASE}/getFile").mock(
+        return_value=httpx.Response(200, json={
+            "ok": True, "result": {"file_path": "voice/f.ogg"},
+        })
+    )
+    respx.get(f"{FILE_BASE}/voice/f.ogg").mock(
+        return_value=httpx.Response(200, content=b"audio")
+    )
+    send_route = respx.post(f"{BASE}/sendMessage").mock(
+        return_value=httpx.Response(200, json={"ok": True})
+    )
+    respx.post(f"{BASE}/sendChatAction").mock(
+        return_value=httpx.Response(200, json={"ok": True})
+    )
+
+    updates = {"ok": True, "result": [voice_update]}
+    _run_one_poll(bot, agent, lock, updates)
+
+    agent.run.assert_called_once_with(
+        "[Replying to: Tell me more about this]\n\n[Voice message transcription]: voice text"
+    )
+    payload = json.loads(send_route.calls[0].request.content)
+    assert payload["reply_parameters"] == {"message_id": 200}
+
+
+def test_extract_reply_context_no_reply():
+    """_extract_reply_context returns None when no reply_to_message."""
+    bot = TelegramBot(token=TOKEN)
+    assert bot._extract_reply_context({"text": "hello"}) is None
+
+
+def test_extract_reply_context_with_reply():
+    """_extract_reply_context returns the quoted text."""
+    bot = TelegramBot(token=TOKEN)
+    msg = {
+        "text": "follow up",
+        "reply_to_message": {"message_id": 1, "text": "original text"},
+    }
+    assert bot._extract_reply_context(msg) == "original text"
+
+
+def test_extract_reply_context_empty_text():
+    """_extract_reply_context returns None when quoted message has no text (e.g. photo)."""
+    bot = TelegramBot(token=TOKEN)
+    msg = {
+        "text": "what's this?",
+        "reply_to_message": {"message_id": 1},
+    }
+    assert bot._extract_reply_context(msg) is None

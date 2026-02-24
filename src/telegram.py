@@ -50,11 +50,23 @@ class TelegramBot:
         resp.raise_for_status()
         return resp.json()
 
-    def _send_message(self, chat_id: int, text: str) -> None:
-        """Send a text message to a Telegram chat."""
+    def _send_message(
+        self, chat_id: int, text: str, reply_to_message_id: int | None = None,
+    ) -> None:
+        """Send a text message to a Telegram chat.
+
+        Args:
+            chat_id: Target chat.
+            text: Message body.
+            reply_to_message_id: If set, the message is sent as a reply to
+                this message ID (Telegram displays the quoted original).
+        """
+        payload: dict[str, Any] = {"chat_id": chat_id, "text": text}
+        if reply_to_message_id is not None:
+            payload["reply_parameters"] = {"message_id": reply_to_message_id}
         httpx.post(
             f"{self._base_url}/sendMessage",
-            json={"chat_id": chat_id, "text": text},
+            json=payload,
             timeout=30.0,
         )
 
@@ -65,6 +77,14 @@ class TelegramBot:
             json={"chat_id": chat_id, "action": "typing"},
             timeout=10.0,
         )
+
+    @staticmethod
+    def _extract_reply_context(message: dict[str, Any]) -> str | None:
+        """Return the text of the message being replied to, if any."""
+        reply = message.get("reply_to_message")
+        if not reply:
+            return None
+        return reply.get("text", "").strip() or None
 
     def _is_allowed(self, chat_id: int) -> bool:
         """Check if a chat ID is allowed (empty set = all allowed)."""
@@ -125,6 +145,12 @@ class TelegramBot:
 
         prefixed_text = f"[Voice message transcription]: {text}"
 
+        reply_context = self._extract_reply_context(message)
+        if reply_context:
+            prefixed_text = f"[Replying to: {reply_context}]\n\n{prefixed_text}"
+
+        msg_id = message.get("message_id")
+
         agent_lock.acquire()
         try:
             response = agent.run(prefixed_text)
@@ -134,7 +160,7 @@ class TelegramBot:
         finally:
             agent_lock.release()
 
-        self._send_message(chat_id, response)
+        self._send_message(chat_id, response, reply_to_message_id=msg_id)
         print(f"  [telegram] replied to chat {chat_id}")
 
     def poll_loop(self, agent: Any, agent_lock: threading.Lock) -> None:
@@ -181,6 +207,12 @@ class TelegramBot:
                     print(f"  [telegram] message from chat {chat_id}: {text[:80]}")
                     self._send_typing(chat_id)
 
+                    reply_context = self._extract_reply_context(message)
+                    if reply_context:
+                        text = f"[Replying to: {reply_context}]\n\n{text}"
+
+                    msg_id = message.get("message_id")
+
                     agent_lock.acquire()
                     try:
                         response = agent.run(text)
@@ -190,7 +222,7 @@ class TelegramBot:
                     finally:
                         agent_lock.release()
 
-                    self._send_message(chat_id, response)
+                    self._send_message(chat_id, response, reply_to_message_id=msg_id)
                     print(f"  [telegram] replied to chat {chat_id}")
 
             except Exception as exc:
