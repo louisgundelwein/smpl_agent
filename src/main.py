@@ -208,7 +208,12 @@ def start(config: Config) -> None:
     from src.daemon import start_daemon
 
     try:
-        pid = start_daemon(config.daemon_pid_path, config.daemon_log_path)
+        pid = start_daemon(
+            config.daemon_pid_path,
+            config.daemon_log_path,
+            host=config.agent_host,
+            port=config.agent_port,
+        )
     except RuntimeError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)

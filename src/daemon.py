@@ -64,7 +64,19 @@ def is_process_alive(pid: int) -> bool:
             return True
 
 
-def start_daemon(pid_path: str, log_path: str) -> int:
+def is_port_in_use(host: str, port: int) -> bool:
+    """Check if a TCP port is already in use."""
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind((host, port))
+            return False
+        except OSError:
+            return True
+
+
+def start_daemon(pid_path: str, log_path: str, host: str = "127.0.0.1", port: int = 7600) -> int:
     """Launch 'python -m src.main serve' as a detached background process.
 
     Returns the PID of the child process.
@@ -81,6 +93,12 @@ def start_daemon(pid_path: str, log_path: str) -> int:
 
     if existing_pid is not None:
         remove_pid(pid_path)
+
+    if is_port_in_use(host, port):
+        raise RuntimeError(
+            f"Port {port} is already in use (possibly by a previous agent without a PID file). "
+            f"Find the process with: lsof -i :{port}"
+        )
 
     log_dir = os.path.dirname(log_path)
     if log_dir:

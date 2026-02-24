@@ -197,7 +197,14 @@ class AgentServer:
 
         self._server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self._server_socket.bind((self._host, self._port))
+        try:
+            self._server_socket.bind((self._host, self._port))
+        except OSError as exc:
+            self._server_socket.close()
+            raise RuntimeError(
+                f"Cannot bind to {self._host}:{self._port}: {exc}. "
+                f"Is another agent already running? Check with: lsof -i :{self._port}"
+            ) from exc
         self._server_socket.listen(1)
         self._server_socket.settimeout(1.0)
         self._running = True

@@ -1,6 +1,7 @@
 """Codex tool: delegate coding tasks to OpenAI's Codex CLI."""
 
 import json
+import os
 import subprocess
 from typing import Any
 
@@ -86,6 +87,15 @@ class CodexTool(Tool):
         cwd = kwargs.get("cwd") or None
 
         try:
+            # Codex CLI uses its own auth (device login) and must always
+            # talk to OpenAI directly.  Strip OPENAI_BASE_URL / OPENAI_API_KEY
+            # so the agent's custom LLM config doesn't leak into Codex.
+            env = {
+                k: v
+                for k, v in os.environ.items()
+                if k not in ("OPENAI_BASE_URL", "OPENAI_API_KEY")
+            }
+
             result = subprocess.run(
                 cmd,
                 input=prompt,
@@ -93,6 +103,7 @@ class CodexTool(Tool):
                 text=True,
                 timeout=self._timeout,
                 cwd=cwd,
+                env=env,
             )
 
             stdout = result.stdout.strip()

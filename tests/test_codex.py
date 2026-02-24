@@ -1,6 +1,7 @@
 """Tests for src.tools.codex."""
 
 import json
+import os
 import subprocess
 
 import pytest
@@ -139,3 +140,23 @@ def test_exception_returns_error_json(tool, mocker):
 
     assert "error" in result
     assert "something broke" in result["error"]
+
+
+def test_env_strips_openai_vars(tool, mocker):
+    """Codex must not inherit OPENAI_BASE_URL or OPENAI_API_KEY from the agent."""
+    mocker.patch.dict(os.environ, {
+        "OPENAI_BASE_URL": "https://custom.example.com/v1",
+        "OPENAI_API_KEY": "sk-secret",
+        "HOME": "/home/test",
+    })
+    events = json.dumps({"type": "message", "content": "ok"})
+    mock_run = mocker.patch("subprocess.run", return_value=subprocess.CompletedProcess(
+        args=[], returncode=0, stdout=events, stderr="",
+    ))
+
+    tool.execute(prompt="test")
+
+    env_passed = mock_run.call_args.kwargs["env"]
+    assert "OPENAI_BASE_URL" not in env_passed
+    assert "OPENAI_API_KEY" not in env_passed
+    assert env_passed["HOME"] == "/home/test"

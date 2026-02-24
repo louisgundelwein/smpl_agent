@@ -9,6 +9,7 @@ import pytest
 
 from src.daemon import (
     daemon_status,
+    is_port_in_use,
     is_process_alive,
     read_pid,
     remove_pid,
@@ -107,6 +108,13 @@ class TestStartDaemon:
         with pytest.raises(RuntimeError, match="already running"):
             start_daemon(pid_file, str(tmp_path / "test.log"))
 
+    def test_raises_if_port_in_use(self, tmp_path, mocker):
+        pid_file = str(tmp_path / "test.pid")
+        log_file = str(tmp_path / "test.log")
+        mocker.patch("src.daemon.is_port_in_use", return_value=True)
+        with pytest.raises(RuntimeError, match="already in use"):
+            start_daemon(pid_file, log_file)
+
     def test_cleans_stale_pid_and_starts(self, tmp_path, mocker):
         pid_file = str(tmp_path / "test.pid")
         log_file = str(tmp_path / "test.log")
@@ -114,6 +122,7 @@ class TestStartDaemon:
 
         mock_proc = MagicMock()
         mock_proc.pid = 99999
+        mocker.patch("src.daemon.is_port_in_use", return_value=False)
         mock_popen = mocker.patch("src.daemon.subprocess.Popen", return_value=mock_proc)
 
         pid = start_daemon(pid_file, log_file)
@@ -128,6 +137,7 @@ class TestStartDaemon:
 
         mock_proc = MagicMock()
         mock_proc.pid = 55555
+        mocker.patch("src.daemon.is_port_in_use", return_value=False)
         mock_popen = mocker.patch("src.daemon.subprocess.Popen", return_value=mock_proc)
 
         start_daemon(pid_file, log_file)
