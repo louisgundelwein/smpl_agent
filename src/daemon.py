@@ -103,8 +103,12 @@ def start_daemon(pid_path: str, log_path: str) -> int:
     else:
         kwargs["start_new_session"] = True
 
+    env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
+
     proc = subprocess.Popen(
         [sys.executable, "-m", "src.main", "serve"],
+        env=env,
         **kwargs,
     )
 
