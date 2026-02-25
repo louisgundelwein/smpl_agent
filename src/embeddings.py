@@ -11,10 +11,11 @@ class EmbeddingClient:
     """
 
     def __init__(
-        self, api_key: str, model: str, base_url: str | None = None
+        self, api_key: str, model: str, base_url: str | None = None, dimensions: int | None = None
     ) -> None:
         self._client = OpenAI(api_key=api_key, base_url=base_url)
         self._model = model
+        self._dimensions = dimensions
 
     @property
     def model(self) -> str:
@@ -30,9 +31,8 @@ class EmbeddingClient:
         Returns:
             List of embedding vectors (one per input text).
         """
-        response = self._client.embeddings.create(
-            input=texts,
-            model=self._model,
-            extra_body={"task_type": "SEMANTIC_SIMILARITY"},
-        )
+        kwargs = {"input": texts, "model": self._model, "extra_body": {"task_type": "SEMANTIC_SIMILARITY"}}
+        if self._dimensions is not None:
+            kwargs["dimensions"] = self._dimensions
+        response = self._client.embeddings.create(**kwargs)
         return [item.embedding for item in response.data]

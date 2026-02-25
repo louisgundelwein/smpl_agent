@@ -15,7 +15,7 @@ class MemoryStore:
     Supports hybrid search: pgvector cosine similarity + tsvector keyword bonus.
     """
 
-    def __init__(self, db: Database, embedding_client: EmbeddingClient, dimensions: int = 3072) -> None:
+    def __init__(self, db: Database, embedding_client: EmbeddingClient, dimensions: int = 1536) -> None:
         self._embedding_client = embedding_client
         self._db = db
         self._dimensions = dimensions

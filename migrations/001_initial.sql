@@ -13,14 +13,15 @@ CREATE EXTENSION IF NOT EXISTS vector;
 -- ---------------------------------------------------------------------------
 -- memories
 -- Semantic memory store (pgvector + full-text search)
--- Default embedding dimensions match text-embedding-3-large (3072).
--- Override EMBEDDING_DIMENSIONS in .env if using a different model.
+-- Default embedding dimensions: 1536 (fits pgvector HNSW limit of 2000).
+-- Matches text-embedding-3-large with dimensions=1536 or text-embedding-3-small.
+-- Override EMBEDDING_DIMENSIONS in .env if using a different model (must be ≤2000 for HNSW).
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS memories (
     id          SERIAL PRIMARY KEY,
     content     TEXT    NOT NULL,
-    embedding   vector(3072) NOT NULL,
+    embedding   vector(1536) NOT NULL,
     tags        TEXT    NOT NULL DEFAULT '',
     created_at  TEXT    NOT NULL,
     search_vector tsvector GENERATED ALWAYS AS (

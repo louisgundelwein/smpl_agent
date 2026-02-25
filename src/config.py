@@ -62,7 +62,7 @@ class Config:
         ]
 
         embedding_model = os.getenv("EMBEDDING_MODEL", "text-embedding-3-large")
-        embedding_dimensions = int(os.getenv("EMBEDDING_DIMENSIONS", "3072"))
+        embedding_dimensions = int(os.getenv("EMBEDDING_DIMENSIONS", "1536"))
         database_url = os.getenv("DATABASE_URL", "")
         soul_path = os.getenv("SOUL_PATH", "SOUL.md")
         shell_command_timeout = int(os.getenv("SHELL_COMMAND_TIMEOUT", "30"))

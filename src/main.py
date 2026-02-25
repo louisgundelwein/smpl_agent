@@ -116,6 +116,7 @@ def create_agent(
         api_key=config.openai_api_key,
         model=config.embedding_model,
         base_url=config.openai_base_url,
+        dimensions=config.embedding_dimensions,
     )
 
     memory_store = MemoryStore(
