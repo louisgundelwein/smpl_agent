@@ -10,7 +10,35 @@ from src.tools.repos import ReposTool
 
 @pytest.fixture
 def store():
-    return RepoStore(db_path=":memory:")
+    """Fake RepoStore backed by an in-memory dict (no DB required)."""
+    from unittest.mock import MagicMock
+    s = MagicMock(spec=RepoStore)
+    _data = {}
+    _seq = iter(range(1, 10_000))
+
+    def _add(name, owner, repo, url, default_branch="main", description="", tags=None):
+        if name in _data:
+            import psycopg2.errors
+            raise psycopg2.errors.UniqueViolation("duplicate key")
+        repo_id = next(_seq)
+        _data[name] = dict(id=repo_id, name=name, owner=owner, repo=repo, url=url,
+                           default_branch=default_branch, description=description,
+                           tags=tags or [], added_at="2026-01-01T00:00:00+00:00")
+        return repo_id
+
+    def _update(name, **fields):
+        if name not in _data:
+            return False
+        _data[name].update(fields)
+        return True
+
+    s.add.side_effect = _add
+    s.list_all.side_effect = lambda: list(_data.values())
+    s.get.side_effect = lambda name: _data.get(name)
+    s.remove.side_effect = lambda name: bool(_data.pop(name, None))
+    s.update.side_effect = _update
+    s.count.side_effect = lambda: len(_data)
+    return s
 
 
 @pytest.fixture

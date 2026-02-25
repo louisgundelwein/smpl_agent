@@ -443,7 +443,19 @@ def main() -> None:
         status(config)
     else:
         db = Database(config.database_url)
-        agent = create_agent(config, db=db)
+        scheduler_store = SchedulerStore(db=db)
+        repo_store = RepoStore(db=db)
+        calendar_store = CalendarConnectionStore(db=db)
+        email_store = EmailAccountStore(db=db)
+        _load_static_tasks(scheduler_store, config.scheduler_tasks)
+        agent = create_agent(
+            config,
+            db=db,
+            scheduler_store=scheduler_store,
+            repo_store=repo_store,
+            calendar_store=calendar_store,
+            email_store=email_store,
+        )
         repl(agent, db)
 
 
