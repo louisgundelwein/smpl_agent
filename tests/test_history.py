@@ -101,6 +101,30 @@ def test_save_overwrites_existing(history):
     assert history.load() == messages2
 
 
+def test_load_sanitizes_none_values(history, history_path):
+    """Messages with content: null are cleaned on load (Gemini compat)."""
+    messages = [
+        {"role": "system", "content": "sys"},
+        {
+            "role": "assistant",
+            "content": None,
+            "refusal": None,
+            "tool_calls": [{"id": "1", "function": {"name": "x", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "1", "name": "x", "content": "ok"},
+    ]
+    with open(history_path, "w") as f:
+        json.dump(messages, f)
+
+    loaded = history.load()
+
+    # None values should be stripped
+    assistant_msg = loaded[1]
+    assert "content" not in assistant_msg
+    assert "refusal" not in assistant_msg
+    assert assistant_msg["tool_calls"] == messages[1]["tool_calls"]
+
+
 def test_compressed_messages_persist(history):
     """Context-compressed messages (containing summary) round-trip correctly."""
     messages = [

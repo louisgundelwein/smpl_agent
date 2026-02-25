@@ -142,7 +142,7 @@ class Agent:
                 )
             )
 
-            self._messages.append(message.model_dump())
+            self._messages.append(message.model_dump(exclude_none=True))
 
             if not message.tool_calls:
                 self._save_history()

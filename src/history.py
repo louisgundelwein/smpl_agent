@@ -52,7 +52,18 @@ class ConversationHistory:
             return None
         if not isinstance(data[0], dict) or data[0].get("role") != "system":
             return None
-        return data
+        return self._sanitize(data)
+
+    def _sanitize(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Remove None values from messages.
+
+        Some providers (e.g. Gemini) reject messages with ``content: null``.
+        This strips those keys so persisted history stays compatible.
+        """
+        return [
+            {k: v for k, v in msg.items() if v is not None}
+            for msg in messages
+        ]
 
     def clear(self) -> None:
         """Delete the history file if it exists."""
