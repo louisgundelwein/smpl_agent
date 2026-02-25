@@ -9,6 +9,7 @@ from src.events import (
     ContinuationEvent,
     LLMEndEvent,
     LLMStartEvent,
+    RunSummaryEvent,
     SubagentResultsCollectedEvent,
     SubagentSpawnedEvent,
     SubagentStatusEvent,
@@ -30,15 +31,26 @@ def format_event(event: AgentEvent) -> str | None:
             f"({event.message_count} messages, ~{event.estimated_tokens} tokens)"
         )
     elif isinstance(event, LLMEndEvent):
-        action = "tool calls" if event.has_tool_calls else "response"
-        return f"  [llm] done ({action}, {event.duration_ms}ms)"
+        if event.has_tool_calls:
+            action = f"{event.tool_call_count} tool call{'s' if event.tool_call_count != 1 else ''}"
+        else:
+            action = "response"
+        line = f"  [llm] done ({action}, {event.duration_ms}ms)"
+        if event.response_preview:
+            preview = event.response_preview.replace("\n", " ")
+            line += f' "{preview}"'
+        return line
     elif isinstance(event, ToolStartEvent):
         args_display = ", ".join(f"{k}={v!r}" for k, v in event.arguments.items())
         if len(args_display) > 200:
             args_display = args_display[:200] + "..."
         return f"  [tool] {event.tool_name}({args_display})"
     elif isinstance(event, ToolEndEvent):
-        return f"  [tool] done ({event.duration_ms}ms)"
+        line = f"  [tool] done ({event.duration_ms}ms)"
+        if event.result_preview:
+            preview = event.result_preview.replace("\n", " ")[:100]
+            line += f" → {preview}"
+        return line
     elif isinstance(event, ToolErrorEvent):
         return f"  [tool] error: {event.error} ({event.duration_ms}ms)"
     elif isinstance(event, ContextCompressedEvent):
@@ -63,6 +75,13 @@ def format_event(event: AgentEvent) -> str | None:
             f"  [continue] auto-continuing "
             f"({event.continuation_number}/{event.max_continuations})"
         )
+    elif isinstance(event, RunSummaryEvent):
+        return (
+            f"  [agent] done in {event.total_rounds} round{'s' if event.total_rounds != 1 else ''} "
+            f"({event.tool_calls_made} tool calls, "
+            f"{event.continuations_used} continuations, "
+            f"{event.total_duration_ms}ms)"
+        )
     return None
 
 
@@ -83,8 +102,17 @@ def format_message(msg: dict[str, Any]) -> str | None:
             f"~{msg.get('estimated_tokens', '?')} tokens)"
         )
     elif msg_type == "llm_end":
-        action = "tool calls" if msg.get("has_tool_calls") else "response"
-        return f"  [llm] done ({action}, {msg.get('duration_ms', '?')}ms)"
+        if msg.get("has_tool_calls"):
+            count = msg.get("tool_call_count", 0)
+            action = f"{count} tool call{'s' if count != 1 else ''}"
+        else:
+            action = "response"
+        line = f"  [llm] done ({action}, {msg.get('duration_ms', '?')}ms)"
+        preview = msg.get("response_preview")
+        if preview:
+            preview = preview.replace("\n", " ")
+            line += f' "{preview}"'
+        return line
     elif msg_type == "tool_start":
         args = msg.get("arguments", {})
         args_display = ", ".join(f"{k}={v!r}" for k, v in args.items())
@@ -92,7 +120,12 @@ def format_message(msg: dict[str, Any]) -> str | None:
             args_display = args_display[:200] + "..."
         return f"  [tool] {msg.get('tool_name', '')}({args_display})"
     elif msg_type == "tool_end":
-        return f"  [tool] done ({msg.get('duration_ms', '?')}ms)"
+        line = f"  [tool] done ({msg.get('duration_ms', '?')}ms)"
+        preview = msg.get("result_preview")
+        if preview:
+            preview = preview.replace("\n", " ")[:100]
+            line += f" → {preview}"
+        return line
     elif msg_type == "tool_error":
         return f"  [tool] error: {msg.get('error', '')} ({msg.get('duration_ms', '?')}ms)"
     elif msg_type == "context_compressed":
@@ -134,6 +167,14 @@ def format_message(msg: dict[str, Any]) -> str | None:
         return (
             f"  [continue] auto-continuing "
             f"({msg.get('continuation_number', '?')}/{msg.get('max_continuations', '?')})"
+        )
+    elif msg_type == "run_summary":
+        rounds = msg.get("total_rounds", "?")
+        return (
+            f"  [agent] done in {rounds} round{'s' if rounds != 1 else ''} "
+            f"({msg.get('tool_calls_made', '?')} tool calls, "
+            f"{msg.get('continuations_used', '?')} continuations, "
+            f"{msg.get('total_duration_ms', '?')}ms)"
         )
 
     return None

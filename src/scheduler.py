@@ -99,6 +99,14 @@ class SchedulerStore:
                         created_at TEXT NOT NULL
                     )
                 """)
+                # Migration: add direct_tool_call column for LLM-free execution.
+                cur.execute("""
+                    DO $$ BEGIN
+                        ALTER TABLE schedules ADD COLUMN direct_tool_call TEXT;
+                    EXCEPTION
+                        WHEN duplicate_column THEN NULL;
+                    END $$
+                """)
             conn.commit()
         finally:
             self._db.put_connection(conn)
@@ -110,6 +118,7 @@ class SchedulerStore:
         cron_expression: str,
         deliver_to: str = "memory",
         telegram_chat_id: int | None = None,
+        direct_tool_call: dict | None = None,
     ) -> int:
         """Add a new scheduled task.
 
@@ -119,20 +128,24 @@ class SchedulerStore:
             cron_expression: Cron expression or simple interval.
             deliver_to: Where to deliver results ('memory', 'telegram', 'both').
             telegram_chat_id: Telegram chat ID for delivery.
+            direct_tool_call: Optional dict {"tool": name, "args": {...}} for
+                LLM-free direct execution.
 
         Returns:
             The ID of the stored task.
         """
         now = datetime.now(timezone.utc)
         next_run = compute_next_run(cron_expression, after=now)
+        dtc_json = json.dumps(direct_tool_call) if direct_tool_call else None
 
         conn = self._db.get_connection()
         try:
             with conn.cursor() as cur:
                 cur.execute(
                     """INSERT INTO schedules
-                       (name, prompt, cron_expression, deliver_to, telegram_chat_id, next_run_at, created_at)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+                       (name, prompt, cron_expression, deliver_to, telegram_chat_id,
+                        next_run_at, created_at, direct_tool_call)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
                     (
                         name,
                         prompt,
@@ -141,6 +154,7 @@ class SchedulerStore:
                         telegram_chat_id,
                         next_run.isoformat(),
                         now.isoformat(),
+                        dtc_json,
                     ),
                 )
                 row = cur.fetchone()
@@ -331,6 +345,23 @@ class Scheduler:
 
         logger.info("[scheduler] running task: %s", task_name)
 
+        # Direct tool execution: bypass the LLM entirely.
+        dtc_raw = task.get("direct_tool_call")
+        if dtc_raw:
+            dtc = json.loads(dtc_raw) if isinstance(dtc_raw, str) else dtc_raw
+            tool_name = dtc.get("tool")
+            tool_args = dtc.get("args", {})
+            try:
+                result = agent.registry.execute(tool_name, **tool_args)
+            except Exception as exc:
+                logger.error("[scheduler] direct task '%s' failed: %s", task_name, exc)
+                result = f"Error: {exc}"
+            self._store.mark_run(task["id"])
+            self._deliver_result(task, result)
+            logger.info("[scheduler] task '%s' completed (direct)", task_name)
+            return
+
+        # LLM-based execution (fallback for non-strategy tasks).
         if not agent_lock.acquire(timeout=300):
             logger.warning("[scheduler] task '%s' skipped: agent busy", task_name)
             return

@@ -13,6 +13,7 @@ from src.events import (
     EventEmitter,
     LLMEndEvent,
     LLMStartEvent,
+    RunSummaryEvent,
     SubagentResultsCollectedEvent,
     SubagentWaitEvent,
     ToolEndEvent,
@@ -97,6 +98,11 @@ class Agent:
         return self._emitter
 
     @property
+    def registry(self) -> ToolRegistry:
+        """Access the agent's tool registry (for direct tool execution)."""
+        return self._registry
+
+    @property
     def messages(self) -> list[dict[str, Any]]:
         """Current conversation history (read-only copy)."""
         return list(self._messages)
@@ -115,7 +121,10 @@ class Agent:
 
         continuations_used = 0
         consecutive_text = 0
+        any_tools_used = False
+        tool_calls_made = 0
         total_rounds = self._max_tool_rounds + self._max_continuations
+        run_t0 = time.monotonic()
 
         for round_num in range(1, total_rounds + 1):
             if self._context_manager:
@@ -145,21 +154,37 @@ class Agent:
                 )
             )
 
+            # Snapshot message count so we can roll back on LLM error.
+            # Without this, a failed round leaves corrupted messages
+            # (e.g. empty assistant message + orphan continuation prompt)
+            # that cause every subsequent call to fail too.
+            snapshot = len(self._messages)
+
             t0 = time.monotonic()
-            response = self._llm.chat(
-                messages=self._messages,
-                tools=tool_schemas or None,
-            )
+            try:
+                response = self._llm.chat(
+                    messages=self._messages,
+                    tools=tool_schemas or None,
+                )
+            except Exception:
+                del self._messages[snapshot:]
+                raise
             llm_ms = int((time.monotonic() - t0) * 1000)
 
             choice = response.choices[0]
             message = choice.message
 
+            tc_count = len(message.tool_calls) if message.tool_calls else 0
+            preview = None
+            if not message.tool_calls and message.content:
+                preview = message.content[:150]
             self._emitter.emit(
                 LLMEndEvent(
                     round_number=round_num,
                     has_tool_calls=bool(message.tool_calls),
                     duration_ms=llm_ms,
+                    tool_call_count=tc_count,
+                    response_preview=preview,
                 )
             )
 
@@ -198,12 +223,15 @@ class Agent:
                     continue
 
                 # Auto-continue: nudge the LLM to keep working if it
-                # returned text without using tools and hasn't given
-                # two consecutive text-only responses.
+                # has used tools in this run (indicating a multi-step
+                # workflow) and hasn't given two consecutive text-only
+                # responses.  Skip continuation for simple Q&A where
+                # no tools were ever called.
                 if (
                     self._max_continuations > 0
                     and continuations_used < self._max_continuations
                     and consecutive_text < 2
+                    and any_tools_used
                 ):
                     continuations_used += 1
                     self._emitter.emit(
@@ -217,6 +245,15 @@ class Agent:
                     )
                     continue
 
+                run_ms = int((time.monotonic() - run_t0) * 1000)
+                self._emitter.emit(
+                    RunSummaryEvent(
+                        total_rounds=round_num,
+                        tool_calls_made=tool_calls_made,
+                        continuations_used=continuations_used,
+                        total_duration_ms=run_ms,
+                    )
+                )
                 self._save_history()
                 if self._auto_memory:
                     self._auto_memory.on_turn_end(list(self._messages))
@@ -224,6 +261,8 @@ class Agent:
 
             # Tool calls executed — reset consecutive text counter.
             consecutive_text = 0
+            any_tools_used = True
+            tool_calls_made += len(message.tool_calls)
 
             for tool_call in message.tool_calls:
                 func_name = tool_call.function.name
@@ -235,7 +274,13 @@ class Agent:
                 try:
                     result = self._registry.execute(func_name, **func_args)
                     tool_ms = int((time.monotonic() - t0) * 1000)
-                    self._emitter.emit(ToolEndEvent(tool_name=func_name, duration_ms=tool_ms))
+                    self._emitter.emit(
+                        ToolEndEvent(
+                            tool_name=func_name,
+                            duration_ms=tool_ms,
+                            result_preview=result[:200] if result else None,
+                        )
+                    )
                 except Exception as exc:
                     tool_ms = int((time.monotonic() - t0) * 1000)
                     result = json.dumps({"error": str(exc)})

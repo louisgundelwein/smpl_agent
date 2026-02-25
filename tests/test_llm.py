@@ -2,6 +2,58 @@
 
 from unittest.mock import MagicMock, patch
 
+from src.llm import LLMClient
+
+
+# --- Sanitize tests ---
+
+
+def test_sanitize_strips_unknown_fields():
+    msgs = [
+        {
+            "role": "assistant",
+            "content": "hi",
+            "annotations": [],
+            "refusal": None,
+            "audio": None,
+        }
+    ]
+    result = LLMClient._sanitize_messages(msgs)
+    assert result == [{"role": "assistant", "content": "hi"}]
+
+
+def test_sanitize_adds_missing_content():
+    msgs = [
+        {"role": "assistant", "tool_calls": [{"id": "1"}]},
+        {"role": "assistant"},
+    ]
+    result = LLMClient._sanitize_messages(msgs)
+    assert result[0]["content"] == ""
+    assert result[0]["tool_calls"] == [{"id": "1"}]
+    assert result[1]["content"] == ""
+
+
+def test_sanitize_preserves_valid_messages():
+    msgs = [
+        {"role": "system", "content": "You are helpful."},
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hello", "tool_calls": [{"id": "1"}]},
+        {"role": "tool", "content": "result", "tool_call_id": "1", "name": "search"},
+    ]
+    result = LLMClient._sanitize_messages(msgs)
+    assert result == msgs
+
+
+def test_sanitize_adds_content_to_all_roles():
+    """Every message gets content if missing, not just assistant."""
+    msgs = [{"role": "user"}, {"role": "system"}]
+    result = LLMClient._sanitize_messages(msgs)
+    assert result[0]["content"] == ""
+    assert result[1]["content"] == ""
+
+
+# --- Existing tests ---
+
 
 def test_base_url_passed_to_client():
     with patch("src.llm.OpenAI") as MockOpenAI:

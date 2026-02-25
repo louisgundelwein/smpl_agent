@@ -11,6 +11,7 @@ from src.events import (
     EventEmitter,
     LLMEndEvent,
     LLMStartEvent,
+    RunSummaryEvent,
     SubagentResultsCollectedEvent,
     SubagentWaitEvent,
     ToolEndEvent,
@@ -223,22 +224,27 @@ def test_events_emitted_during_tool_call(registry_with_dummy):
     agent = Agent(llm=mock_llm, registry=registry_with_dummy, emitter=emitter, max_continuations=0)
     agent.run("test")
 
-    # 6 events: LLMStart, LLMEnd, ToolStart, ToolEnd, LLMStart, LLMEnd
-    assert len(events) == 6
+    # 7 events: LLMStart, LLMEnd, ToolStart, ToolEnd, LLMStart, LLMEnd, RunSummary
+    assert len(events) == 7
     assert isinstance(events[0], LLMStartEvent)
     assert events[0].round_number == 1
     assert isinstance(events[1], LLMEndEvent)
     assert events[1].has_tool_calls is True
+    assert events[1].tool_call_count == 1
     assert isinstance(events[2], ToolStartEvent)
     assert events[2].tool_name == "dummy"
     assert events[2].arguments == {"arg1": "hello"}
     assert isinstance(events[3], ToolEndEvent)
     assert events[3].tool_name == "dummy"
     assert events[3].duration_ms >= 0
+    assert events[3].result_preview is not None
     assert isinstance(events[4], LLMStartEvent)
     assert events[4].round_number == 2
     assert isinstance(events[5], LLMEndEvent)
     assert events[5].has_tool_calls is False
+    assert isinstance(events[6], RunSummaryEvent)
+    assert events[6].total_rounds == 2
+    assert events[6].tool_calls_made == 1
 
 
 def test_context_manager_called_before_llm(registry_with_dummy):
@@ -393,7 +399,7 @@ def test_llm_events_emitted_on_simple_response(registry_with_dummy):
     agent = Agent(llm=mock_llm, registry=registry_with_dummy, emitter=emitter, max_continuations=0)
     agent.run("hi")
 
-    assert len(events) == 2
+    assert len(events) == 3  # LLMStart, LLMEnd, RunSummary
     assert isinstance(events[0], LLMStartEvent)
     assert events[0].round_number == 1
     assert events[0].message_count == 2  # system + user
@@ -402,6 +408,11 @@ def test_llm_events_emitted_on_simple_response(registry_with_dummy):
     assert events[1].round_number == 1
     assert events[1].has_tool_calls is False
     assert events[1].duration_ms >= 0
+    assert events[1].response_preview == "Hello!"
+    assert isinstance(events[2], RunSummaryEvent)
+    assert events[2].total_rounds == 1
+    assert events[2].tool_calls_made == 0
+    assert events[2].continuations_used == 0
 
 
 def test_llm_events_round_numbers_increment(registry_with_dummy):
@@ -660,21 +671,34 @@ def test_agent_works_without_auto_memory(registry_with_dummy):
 # --- Auto-continuation tests ---
 
 
-def test_continuation_nudge_then_final(registry_with_dummy):
-    """LLM returns text, gets nudged, returns text again -> final answer."""
+def test_no_continuation_without_prior_tools(registry_with_dummy):
+    """LLM returns text without ever using tools -> no continuation, returns immediately."""
     mock_llm = MagicMock()
-    msg1 = _make_message(content="I'll look that up.")
-    msg2 = _make_message(content="Here's the answer.")
+    msg = _make_message(content="Here's the answer.")
+    mock_llm.chat.return_value = _make_response(msg)
+
+    agent = Agent(llm=mock_llm, registry=registry_with_dummy, max_continuations=5)
+    result = agent.run("hello")
+
+    assert result == "Here's the answer."
+    assert mock_llm.chat.call_count == 1  # no continuation nudge
+
+
+def test_continuation_nudge_after_tool_use(registry_with_dummy):
+    """After using tools, text response triggers continuation nudge."""
+    mock_llm = MagicMock()
+    tc = _make_tool_call("call_1", "dummy", {"arg1": "x"})
     mock_llm.chat.side_effect = [
-        _make_response(msg1),
-        _make_response(msg2),
+        _make_response(_make_message(tool_calls=[tc])),         # tools
+        _make_response(_make_message(content="I found it.")),   # text -> nudge
+        _make_response(_make_message(content="Here's the answer.")),  # text -> return
     ]
 
     agent = Agent(llm=mock_llm, registry=registry_with_dummy, max_continuations=5)
     result = agent.run("hello")
 
     assert result == "Here's the answer."
-    assert mock_llm.chat.call_count == 2
+    assert mock_llm.chat.call_count == 3
 
     # Verify nudge message was injected
     user_msgs = [
@@ -685,27 +709,24 @@ def test_continuation_nudge_then_final(registry_with_dummy):
     assert "[Continue" in user_msgs[1]["content"]
 
 
-def test_continuation_triggers_tool_use(registry_with_dummy):
-    """LLM returns text, nudge causes tool use, then final answer."""
+def test_continuation_triggers_more_tool_use(registry_with_dummy):
+    """After initial tools, text gets nudged, nudge causes more tool use."""
     mock_llm = MagicMock()
-    msg1 = _make_message(content="Let me check that.")
-    tc = _make_tool_call("call_1", "dummy", {"arg1": "test"})
-    msg2 = _make_message(tool_calls=[tc])
-    msg3 = _make_message(content="Here's the result.")
-    # After tool use, consecutive_text resets to 0, so first text gets nudged again
-    msg4 = _make_message(content="Final summary.")
+    tc1 = _make_tool_call("call_1", "dummy", {"arg1": "first"})
+    tc2 = _make_tool_call("call_2", "dummy", {"arg1": "second"})
     mock_llm.chat.side_effect = [
-        _make_response(msg1),  # text -> nudge (consecutive_text=1)
-        _make_response(msg2),  # tool call -> reset consecutive_text
-        _make_response(msg3),  # text -> nudge (consecutive_text=1 again)
-        _make_response(msg4),  # text -> consecutive_text=2 -> return
+        _make_response(_make_message(tool_calls=[tc1])),        # tool call -> any_tools_used=True
+        _make_response(_make_message(content="Let me check.")), # text -> nudge (consec=1)
+        _make_response(_make_message(tool_calls=[tc2])),        # tool call -> reset consec
+        _make_response(_make_message(content="Here's result.")),# text -> nudge (consec=1)
+        _make_response(_make_message(content="Final.")),        # text -> consec=2 -> return
     ]
 
     agent = Agent(llm=mock_llm, registry=registry_with_dummy, max_continuations=5)
     result = agent.run("search for something")
 
-    assert result == "Final summary."
-    assert mock_llm.chat.call_count == 4
+    assert result == "Final."
+    assert mock_llm.chat.call_count == 5
 
 
 def test_continuation_disabled_when_zero(registry_with_dummy):
@@ -725,9 +746,11 @@ def test_consecutive_text_resets_after_tools(registry_with_dummy):
     """Tool calls reset the consecutive text counter."""
     mock_llm = MagicMock()
     tc = _make_tool_call("call_1", "dummy", {"arg1": "x"})
+    tc2 = _make_tool_call("call_2", "dummy", {"arg1": "y"})
     mock_llm.chat.side_effect = [
+        _make_response(_make_message(tool_calls=[tc])),         # tools -> any_tools_used=True
         _make_response(_make_message(content="Thinking...")),   # text (consec=1) -> nudge
-        _make_response(_make_message(tool_calls=[tc])),         # tools -> consec resets
+        _make_response(_make_message(tool_calls=[tc2])),        # tools -> consec resets
         _make_response(_make_message(content="More thinking")), # text (consec=1) -> nudge
         _make_response(_make_message(content="Done now.")),     # text (consec=2) -> return
     ]
@@ -736,13 +759,15 @@ def test_consecutive_text_resets_after_tools(registry_with_dummy):
     result = agent.run("test")
 
     assert result == "Done now."
-    assert mock_llm.chat.call_count == 4
+    assert mock_llm.chat.call_count == 5
 
 
 def test_continuation_event_emitted(registry_with_dummy):
     """ContinuationEvent is emitted when a nudge is injected."""
     mock_llm = MagicMock()
+    tc = _make_tool_call("call_1", "dummy", {"arg1": "x"})
     mock_llm.chat.side_effect = [
+        _make_response(_make_message(tool_calls=[tc])),          # tools -> any_tools_used
         _make_response(_make_message(content="Working on it...")),
         _make_response(_make_message(content="Done.")),
     ]
@@ -769,9 +794,11 @@ def test_max_continuations_cap(registry_with_dummy):
     """Agent stops after max_continuations nudges are exhausted."""
     mock_llm = MagicMock()
     tc = _make_tool_call("call_1", "dummy", {"arg1": "x"})
-    # Each text->nudge->tools cycle uses one continuation.
-    # With max_continuations=2, after 2 nudges the next text returns immediately.
+    # Initial tools set any_tools_used=True, then each text->nudge->tools cycle
+    # uses one continuation. With max_continuations=2, after 2 nudges the next
+    # text returns immediately.
     mock_llm.chat.side_effect = [
+        _make_response(_make_message(tool_calls=[tc])),     # tools -> any_tools_used=True
         _make_response(_make_message(content="Step 1")),    # nudge (cont=1)
         _make_response(_make_message(tool_calls=[tc])),     # tools -> reset consec
         _make_response(_make_message(content="Step 2")),    # nudge (cont=2)
@@ -783,24 +810,80 @@ def test_max_continuations_cap(registry_with_dummy):
     result = agent.run("test")
 
     assert result == "Step 3"
-    assert mock_llm.chat.call_count == 5
+    assert mock_llm.chat.call_count == 6
+
+
+def test_llm_error_rolls_back_messages(registry_with_dummy):
+    """When the LLM call raises, messages added during the round are removed."""
+    mock_llm = MagicMock()
+
+    # First call succeeds (tool call + tool result), second call fails.
+    tc = _make_tool_call("call_1", "dummy", {"arg1": "x"})
+    tool_msg = _make_message(tool_calls=[tc])
+    mock_llm.chat.side_effect = [
+        _make_response(tool_msg),
+        RuntimeError("Gemini 400"),
+    ]
+
+    agent = Agent(llm=mock_llm, registry=registry_with_dummy, max_continuations=0)
+    initial_count = len(agent.messages)  # system prompt only
+
+    with pytest.raises(RuntimeError, match="Gemini 400"):
+        agent.run("test")
+
+    # After error, messages should have: system + user + assistant + tool
+    # The second LLM call failed, so nothing from round 2 should remain.
+    # (The assistant message + tool result from round 1 are committed before
+    # round 2 starts, so they persist.)
+    assert len(agent.messages) == initial_count + 3  # user + assistant + tool
+
+
+def test_llm_error_during_continuation_rolls_back(registry_with_dummy):
+    """Continuation prompt is rolled back when the next LLM call fails."""
+    mock_llm = MagicMock()
+
+    # First call: tool use (sets any_tools_used), second: text (triggers continuation),
+    # third: LLM error (should roll back).
+    tc = _make_tool_call("call_1", "dummy", {"arg1": "x"})
+    mock_llm.chat.side_effect = [
+        _make_response(_make_message(tool_calls=[tc])),
+        _make_response(_make_message(content="Working on it...")),
+        RuntimeError("Gemini 400"),
+    ]
+
+    agent = Agent(llm=mock_llm, registry=registry_with_dummy, max_continuations=5)
+
+    with pytest.raises(RuntimeError, match="Gemini 400"):
+        agent.run("test")
+
+    # Messages should have: system + user + assistant(tool) + tool_result +
+    # assistant(text) + continuation user.
+    # The continuation user message was added before round 3's LLM call,
+    # so it persists. But no corrupted assistant from round 3.
+    msgs = agent.messages
+    assert msgs[-1]["role"] == "user"
+    assert "[Continue" in msgs[-1]["content"]
 
 
 def test_subagent_wait_before_continuation(registry_with_dummy):
-    """Subagent wait fires before continuation logic."""
+    """Subagent wait fires before continuation logic. After subagent results,
+    continuation only fires if tools were used at some point."""
     mock_llm = MagicMock()
     mock_sm = MagicMock()
+    tc = _make_tool_call("call_1", "dummy", {"arg1": "spawn"})
 
-    # Round 1: text → subagent active → wait_all → re-enter loop (no continuation)
-    # Round 2: text → no subagents → continuation nudge (consecutive_text=1)
-    # Round 3: text → no subagents → consecutive_text=2 → done
+    # Round 1: tool call (spawns subagent) → any_tools_used=True
+    # Round 2: text → subagent active → wait_all → re-enter loop
+    # Round 3: text → no subagents → continuation nudge (consecutive_text=1)
+    # Round 4: text → no subagents → consecutive_text=2 → done
     mock_llm.chat.side_effect = [
+        _make_response(_make_message(tool_calls=[tc])),
         _make_response(_make_message(content="Started subagents.")),
         _make_response(_make_message(content="Results synthesized.")),
         _make_response(_make_message(content="All done.")),
     ]
 
-    # Round 1: 1 active (triggers wait), rounds 2+3: 0 active
+    # Round 1: no subagents yet; round 2: 1 active; rounds 3+4: 0 active
     mock_sm.active_count.side_effect = [1, 0, 0]
     mock_sm.wait_all.return_value = [
         {"id": "a", "task": "t", "status": "completed", "result": "r",
@@ -820,11 +903,9 @@ def test_subagent_wait_before_continuation(registry_with_dummy):
     )
     result = agent.run("test")
 
-    # Subagent wait happened first (round 1), before any continuation
     mock_sm.wait_all.assert_called_once()
     wait_events = [e for e in events if isinstance(e, SubagentWaitEvent)]
     cont_events = [e for e in events if isinstance(e, ContinuationEvent)]
     assert len(wait_events) == 1
-    # Continuation only fires after subagent wait is done (round 2)
     assert len(cont_events) == 1
     assert result == "All done."

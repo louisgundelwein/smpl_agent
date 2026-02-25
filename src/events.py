@@ -18,6 +18,7 @@ class ToolEndEvent:
 
     tool_name: str
     duration_ms: int
+    result_preview: str | None = None
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,8 @@ class LLMEndEvent:
     round_number: int
     has_tool_calls: bool
     duration_ms: int
+    tool_call_count: int = 0
+    response_preview: str | None = None
 
 
 @dataclass(frozen=True)
@@ -106,6 +109,16 @@ class ContinuationEvent:
     max_continuations: int
 
 
+@dataclass(frozen=True)
+class RunSummaryEvent:
+    """Emitted when a run() call completes successfully."""
+
+    total_rounds: int
+    tool_calls_made: int
+    continuations_used: int
+    total_duration_ms: int
+
+
 AgentEvent = (
     ToolStartEvent
     | ToolEndEvent
@@ -119,6 +132,7 @@ AgentEvent = (
     | SubagentResultsCollectedEvent
     | AutoMemoryStoredEvent
     | ContinuationEvent
+    | RunSummaryEvent
 )
 
 EventCallback = Callable[[AgentEvent], None]

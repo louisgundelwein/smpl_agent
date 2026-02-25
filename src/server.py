@@ -14,6 +14,7 @@ from src.events import (
     ContinuationEvent,
     LLMEndEvent,
     LLMStartEvent,
+    RunSummaryEvent,
     SubagentResultsCollectedEvent,
     SubagentSpawnedEvent,
     SubagentStatusEvent,
@@ -42,6 +43,8 @@ def _event_to_message(event: AgentEvent) -> dict[str, Any]:
             "round_number": event.round_number,
             "has_tool_calls": event.has_tool_calls,
             "duration_ms": event.duration_ms,
+            "tool_call_count": event.tool_call_count,
+            "response_preview": event.response_preview,
         }
     elif isinstance(event, ToolStartEvent):
         return {
@@ -54,6 +57,7 @@ def _event_to_message(event: AgentEvent) -> dict[str, Any]:
             "type": "tool_end",
             "tool_name": event.tool_name,
             "duration_ms": event.duration_ms,
+            "result_preview": event.result_preview,
         }
     elif isinstance(event, ToolErrorEvent):
         return {
@@ -106,6 +110,14 @@ def _event_to_message(event: AgentEvent) -> dict[str, Any]:
             "type": "continuation",
             "continuation_number": event.continuation_number,
             "max_continuations": event.max_continuations,
+        }
+    elif isinstance(event, RunSummaryEvent):
+        return {
+            "type": "run_summary",
+            "total_rounds": event.total_rounds,
+            "tool_calls_made": event.tool_calls_made,
+            "continuations_used": event.continuations_used,
+            "total_duration_ms": event.total_duration_ms,
         }
     # Defensive: log unknown event types instead of crashing
     logger.warning("Unknown event type: %s", type(event).__name__)

@@ -6,6 +6,7 @@ from src.events import (
     ContextCompressedEvent,
     LLMEndEvent,
     LLMStartEvent,
+    RunSummaryEvent,
     ToolEndEvent,
     ToolErrorEvent,
     ToolStartEvent,
@@ -25,11 +26,17 @@ def test_format_llm_start_event():
 
 
 def test_format_llm_end_event_with_tool_calls():
-    event = LLMEndEvent(round_number=1, has_tool_calls=True, duration_ms=1843)
+    event = LLMEndEvent(round_number=1, has_tool_calls=True, duration_ms=1843, tool_call_count=3)
     result = format_event(event)
     assert "[llm] done" in result
-    assert "tool calls" in result
+    assert "3 tool calls" in result
     assert "1843ms" in result
+
+
+def test_format_llm_end_event_single_tool_call():
+    event = LLMEndEvent(round_number=1, has_tool_calls=True, duration_ms=500, tool_call_count=1)
+    result = format_event(event)
+    assert "1 tool call," in result
 
 
 def test_format_llm_end_event_with_response():
@@ -38,6 +45,16 @@ def test_format_llm_end_event_with_response():
     assert "[llm] done" in result
     assert "response" in result
     assert "2105ms" in result
+
+
+def test_format_llm_end_event_with_response_preview():
+    event = LLMEndEvent(
+        round_number=1, has_tool_calls=False, duration_ms=800,
+        response_preview="I'll help you with that task",
+    )
+    result = format_event(event)
+    assert "response" in result
+    assert '"I\'ll help you with that task"' in result
 
 
 def test_format_tool_start_event():
@@ -52,6 +69,13 @@ def test_format_tool_end_event():
     result = format_event(event)
     assert "[tool] done" in result
     assert "245ms" in result
+
+
+def test_format_tool_end_event_with_result_preview():
+    event = ToolEndEvent(tool_name="shell", duration_ms=100, result_preview='{"results": [1, 2, 3]}')
+    result = format_event(event)
+    assert "100ms" in result
+    assert '→ {"results": [1, 2, 3]}' in result
 
 
 def test_format_tool_error_event():
@@ -70,6 +94,21 @@ def test_format_context_compressed_event():
     assert "24 messages removed" in result
     assert "~95000" in result
     assert "~12000" in result
+
+
+def test_format_run_summary_event():
+    event = RunSummaryEvent(total_rounds=3, tool_calls_made=5, continuations_used=1, total_duration_ms=4200)
+    result = format_event(event)
+    assert "[agent] done in 3 rounds" in result
+    assert "5 tool calls" in result
+    assert "1 continuations" in result
+    assert "4200ms" in result
+
+
+def test_format_run_summary_event_single_round():
+    event = RunSummaryEvent(total_rounds=1, tool_calls_made=0, continuations_used=0, total_duration_ms=300)
+    result = format_event(event)
+    assert "1 round " in result
 
 
 def test_format_unknown_event_returns_none():
@@ -209,3 +248,53 @@ def test_format_message_subagent_results_collected():
     result = format_message(msg)
     assert "[subagent] collected 3 result(s)" in result
     assert "1200ms" in result
+
+
+def test_format_message_llm_end_with_tool_count():
+    msg = {
+        "type": "llm_end",
+        "round_number": 1,
+        "has_tool_calls": True,
+        "duration_ms": 500,
+        "tool_call_count": 2,
+    }
+    result = format_message(msg)
+    assert "2 tool calls" in result
+
+
+def test_format_message_llm_end_with_response_preview():
+    msg = {
+        "type": "llm_end",
+        "round_number": 1,
+        "has_tool_calls": False,
+        "duration_ms": 500,
+        "response_preview": "I'll help you with that",
+    }
+    result = format_message(msg)
+    assert '"I\'ll help you with that"' in result
+
+
+def test_format_message_tool_end_with_result_preview():
+    msg = {
+        "type": "tool_end",
+        "tool_name": "shell",
+        "duration_ms": 100,
+        "result_preview": '{"ok": true}',
+    }
+    result = format_message(msg)
+    assert '→ {"ok": true}' in result
+
+
+def test_format_message_run_summary():
+    msg = {
+        "type": "run_summary",
+        "total_rounds": 3,
+        "tool_calls_made": 5,
+        "continuations_used": 0,
+        "total_duration_ms": 4200,
+    }
+    result = format_message(msg)
+    assert "[agent] done in 3 rounds" in result
+    assert "5 tool calls" in result
+    assert "0 continuations" in result
+    assert "4200ms" in result

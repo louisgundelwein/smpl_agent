@@ -95,11 +95,13 @@ class MemoryStore:
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    """SELECT id, content, metadata, created_at,
-                              1 - (embedding <=> %s::vector) AS semantic_score,
-                              CASE WHEN to_tsvector('english', content) @@ plainto_tsquery('english', %s)
-                                   THEN 0.1 ELSE 0.0 END AS fts_bonus
-                       FROM memories
+                    """SELECT * FROM (
+                           SELECT id, content, metadata, created_at,
+                                  1 - (embedding <=> %s::vector) AS semantic_score,
+                                  CASE WHEN to_tsvector('english', content) @@ plainto_tsquery('english', %s)
+                                       THEN 0.1 ELSE 0.0 END AS fts_bonus
+                           FROM memories
+                       ) sub
                        ORDER BY semantic_score + fts_bonus DESC
                        LIMIT %s""",
                     (query_embedding_str, query, top_k),
