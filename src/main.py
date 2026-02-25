@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from src.agent import SYSTEM_PROMPT, Agent
+from src.auto_memory import AutoMemory
 from src.config import Config
 from src.context import ContextManager
 from src.db import Database
@@ -162,6 +163,7 @@ def create_agent(
             max_position_size_usd=config.hyperliquid_max_position_usd,
             max_loss_usd=config.hyperliquid_max_loss_usd,
             max_leverage=config.hyperliquid_max_leverage,
+            scheduler_store=scheduler_store,
         ))
 
     # Subagent system: factory creates isolated agents for subtasks
@@ -194,6 +196,7 @@ def create_agent(
             registry=sub_registry,
             system_prompt=sub_prompt,
             max_tool_rounds=config.subagent_tool_rounds,
+            max_continuations=0,
         )
 
     subagent_manager = SubagentManager(
@@ -210,6 +213,15 @@ def create_agent(
     )
     history = ConversationHistory(db)
 
+    auto_memory = None
+    if config.auto_memory:
+        auto_memory = AutoMemory(
+            llm=llm,
+            memory=memory_store,
+            emitter=emitter,
+            extract_interval=config.auto_memory_extract_interval,
+        )
+
     system_prompt = _load_system_prompt(config.soul_path) + _build_system_context()
     if repo_store:
         system_prompt += _build_repo_context(repo_store)
@@ -221,8 +233,10 @@ def create_agent(
         context_manager=context_manager,
         history=history,
         max_tool_rounds=config.max_tool_rounds,
+        max_continuations=config.max_continuations,
         emitter=emitter,
         subagent_manager=subagent_manager,
+        auto_memory=auto_memory,
     )
 
 

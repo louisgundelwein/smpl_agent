@@ -429,3 +429,415 @@ class TestErrorHandling:
         mock_info.all_mids.return_value = {"ETH": "3000"}
         result = _parse(tool.execute(action="get_price", coin="ETH"))
         assert result["network"] == "TESTNET"
+
+
+# ------------------------------------------------------------------
+# Extended market data actions
+# ------------------------------------------------------------------
+
+
+def _sample_candles(n: int = 50) -> list[dict]:
+    """Generate sample candle data in Hyperliquid SDK format."""
+    return [
+        {
+            "t": i * 3600000,
+            "T": (i + 1) * 3600000,
+            "o": str(100 + i),
+            "h": str(101 + i),
+            "l": str(99 + i),
+            "c": str(100 + i),
+            "v": "1000",
+            "i": "1h",
+            "s": "ETH",
+            "n": 10,
+        }
+        for i in range(n)
+    ]
+
+
+class TestGetIndicators:
+    def test_returns_computed_indicators(self, tool, mock_info):
+        mock_info.candles_snapshot.return_value = _sample_candles(50)
+        result = _parse(tool.execute(
+            action="get_indicators",
+            coin="ETH",
+            indicators=[{"name": "rsi", "period": 14}],
+        ))
+        assert "indicators" in result
+        assert result["current_price"] is not None
+        assert result["coin"] == "ETH"
+        assert result["network"] == "TESTNET"
+
+    def test_multiple_indicators(self, tool, mock_info):
+        mock_info.candles_snapshot.return_value = _sample_candles(50)
+        result = _parse(tool.execute(
+            action="get_indicators",
+            coin="ETH",
+            indicators=[
+                {"name": "rsi", "period": 14},
+                {"name": "ema", "period": 20},
+                {"name": "bollinger_bands", "period": 20},
+            ],
+        ))
+        assert "rsi_14" in result["indicators"]
+        assert "ema_20" in result["indicators"]
+
+    def test_missing_coin(self, tool):
+        result = _parse(tool.execute(
+            action="get_indicators",
+            indicators=[{"name": "rsi"}],
+        ))
+        assert "error" in result
+
+    def test_missing_indicators(self, tool):
+        result = _parse(tool.execute(action="get_indicators", coin="ETH"))
+        assert "error" in result
+
+    def test_no_candle_data(self, tool, mock_info):
+        mock_info.candles_snapshot.return_value = []
+        result = _parse(tool.execute(
+            action="get_indicators",
+            coin="ETH",
+            indicators=[{"name": "rsi"}],
+        ))
+        assert "error" in result
+
+
+class TestGetFundingRate:
+    def test_returns_funding(self, tool, mock_info):
+        mock_info.meta_and_asset_ctxs.return_value = [
+            {"universe": [{"name": "ETH", "szDecimals": 3}]},
+            [{"funding": "0.0001", "premium": "0.00005",
+              "markPx": "3000", "oraclePx": "2999",
+              "openInterest": "50000"}],
+        ]
+        result = _parse(tool.execute(action="get_funding_rate", coin="ETH"))
+        assert result["coin"] == "ETH"
+        assert "current_funding_rate" in result
+        assert "annualized_rate_pct" in result
+        assert result["network"] == "TESTNET"
+
+    def test_unknown_coin(self, tool, mock_info):
+        mock_info.meta_and_asset_ctxs.return_value = [
+            {"universe": [{"name": "BTC", "szDecimals": 5}]},
+            [{"funding": "0.0001"}],
+        ]
+        result = _parse(tool.execute(action="get_funding_rate", coin="FAKE"))
+        assert "error" in result
+
+    def test_missing_coin(self, tool):
+        result = _parse(tool.execute(action="get_funding_rate"))
+        assert "error" in result
+
+
+class TestGetAccountSummary:
+    def test_returns_summary(self, tool, mock_info, store):
+        mock_info.user_state.return_value = {
+            "assetPositions": [{
+                "position": {
+                    "coin": "ETH",
+                    "szi": "1.5",
+                    "entryPx": "3000",
+                    "unrealizedPnl": "150",
+                    "leverage": {"type": "cross", "value": 10},
+                },
+            }],
+            "marginSummary": {
+                "accountValue": "15000",
+                "totalMarginUsed": "5000",
+                "totalRawUsd": "200",
+            },
+            "withdrawable": "10000",
+        }
+        store.get_trades = MagicMock(return_value=[])
+        result = _parse(tool.execute(action="get_account_summary"))
+        assert result["account_value"] == "15000"
+        assert result["position_count"] == 1
+        assert result["total_unrealized_pnl"] == 150.0
+        assert result["network"] == "TESTNET"
+
+    def test_no_positions(self, tool, mock_info, store):
+        mock_info.user_state.return_value = {
+            "assetPositions": [{
+                "position": {"coin": "ETH", "szi": "0", "unrealizedPnl": "0"},
+            }],
+            "marginSummary": {
+                "accountValue": "10000",
+                "totalMarginUsed": "0",
+                "totalRawUsd": "0",
+            },
+            "withdrawable": "10000",
+        }
+        store.get_trades = MagicMock(return_value=[])
+        result = _parse(tool.execute(action="get_account_summary"))
+        assert result["position_count"] == 0
+
+
+# ------------------------------------------------------------------
+# Strategy lifecycle actions
+# ------------------------------------------------------------------
+
+
+class TestCreateStrategy:
+    def test_creates_with_scheduler(self, tool, store):
+        sched_store = MagicMock()
+        sched_store.add.return_value = 5
+        sched_store.get.return_value = {"next_run_at": "2026-01-01T00:05:00+00:00"}
+        tool._scheduler_store = sched_store
+
+        store.save_strategy = MagicMock(return_value=10)
+        result = _parse(tool.execute(
+            action="create_strategy",
+            strategy_name="eth-rsi",
+            description="RSI mean reversion",
+            coins=["ETH"],
+            schedule="every 5m",
+            parameters={"entry_rsi": 30, "exit_rsi": 70},
+        ))
+        assert result["created"] is True
+        assert result["name"] == "eth-rsi"
+        assert result["strategy_id"] == 10
+        assert result["scheduler_task"] is not None
+        store.save_strategy.assert_called_once()
+        sched_store.add.assert_called_once()
+
+    def test_creates_without_scheduler(self, tool, store):
+        tool._scheduler_store = None
+        store.save_strategy = MagicMock(return_value=10)
+        result = _parse(tool.execute(
+            action="create_strategy",
+            strategy_name="eth-rsi",
+            schedule="every 5m",
+        ))
+        assert result["created"] is True
+        assert result["scheduler_task"] is None
+
+    def test_missing_name(self, tool):
+        result = _parse(tool.execute(action="create_strategy", schedule="every 5m"))
+        assert "error" in result
+
+    def test_missing_schedule(self, tool):
+        result = _parse(tool.execute(
+            action="create_strategy", strategy_name="test",
+        ))
+        assert "error" in result
+
+    def test_invalid_schedule(self, tool, store):
+        store.save_strategy = MagicMock(return_value=1)
+        result = _parse(tool.execute(
+            action="create_strategy",
+            strategy_name="test",
+            schedule="invalid cron garbage",
+        ))
+        assert "error" in result
+        assert "Invalid schedule" in result["error"]
+
+
+class TestToggleStrategy:
+    def test_activate(self, tool, store):
+        store.get_strategy = MagicMock(return_value={
+            "id": 1, "name": "eth-rsi",
+            "state": {"status": "inactive", "scheduler_task_name": "strategy-eth-rsi"},
+            "updated_at": "t",
+        })
+        store.save_strategy = MagicMock(return_value=1)
+        sched_store = MagicMock()
+        sched_store.toggle.return_value = True
+        tool._scheduler_store = sched_store
+
+        result = _parse(tool.execute(
+            action="activate_strategy", strategy_name="eth-rsi",
+        ))
+        assert result.get("activated") is True
+        assert result["status"] == "active"
+        sched_store.toggle.assert_called_once_with("strategy-eth-rsi", enabled=True)
+
+    def test_deactivate(self, tool, store):
+        store.get_strategy = MagicMock(return_value={
+            "id": 1, "name": "eth-rsi",
+            "state": {"status": "active", "scheduler_task_name": "strategy-eth-rsi"},
+            "updated_at": "t",
+        })
+        store.save_strategy = MagicMock(return_value=1)
+        sched_store = MagicMock()
+        sched_store.toggle.return_value = True
+        tool._scheduler_store = sched_store
+
+        result = _parse(tool.execute(
+            action="deactivate_strategy", strategy_name="eth-rsi",
+        ))
+        assert result.get("deactivated") is True
+        assert result["status"] == "inactive"
+
+    def test_strategy_not_found(self, tool, store):
+        store.get_strategy = MagicMock(return_value=None)
+        result = _parse(tool.execute(
+            action="activate_strategy", strategy_name="nope",
+        ))
+        assert "error" in result
+
+    def test_missing_name(self, tool):
+        result = _parse(tool.execute(action="activate_strategy"))
+        assert "error" in result
+
+
+class TestDeleteStrategy:
+    def test_deletes_with_scheduler(self, tool, store):
+        store.get_strategy = MagicMock(return_value={
+            "id": 1, "name": "eth-rsi",
+            "state": {"scheduler_task_name": "strategy-eth-rsi"},
+            "updated_at": "t",
+        })
+        store.delete_strategy = MagicMock(return_value=True)
+        sched_store = MagicMock()
+        sched_store.delete.return_value = True
+        tool._scheduler_store = sched_store
+
+        result = _parse(tool.execute(
+            action="delete_strategy", strategy_name="eth-rsi",
+        ))
+        assert result["deleted"] is True
+        assert result["scheduler_deleted"] is True
+
+    def test_deletes_without_scheduler(self, tool, store):
+        store.get_strategy = MagicMock(return_value={
+            "id": 1, "name": "eth-rsi",
+            "state": {},
+            "updated_at": "t",
+        })
+        store.delete_strategy = MagicMock(return_value=True)
+        tool._scheduler_store = None
+
+        result = _parse(tool.execute(
+            action="delete_strategy", strategy_name="eth-rsi",
+        ))
+        assert result["deleted"] is True
+        assert result["scheduler_deleted"] is False
+
+    def test_missing_name(self, tool):
+        result = _parse(tool.execute(action="delete_strategy"))
+        assert "error" in result
+
+
+class TestListStrategies:
+    def test_enriched_listing(self, tool, store):
+        store.list_strategies = MagicMock(return_value=[
+            {"id": 1, "name": "eth-rsi", "updated_at": "t"},
+        ])
+        store.get_strategy = MagicMock(return_value={
+            "id": 1, "name": "eth-rsi",
+            "state": {
+                "description": "RSI strategy",
+                "status": "active",
+                "coins": ["ETH"],
+                "schedule": "every 5m",
+                "last_executed_at": None,
+            },
+            "updated_at": "t",
+        })
+        result = _parse(tool.execute(action="list_strategies"))
+        assert result["count"] == 1
+        assert result["strategies"][0]["status"] == "active"
+        assert result["strategies"][0]["coins"] == ["ETH"]
+
+    def test_empty_list(self, tool, store):
+        store.list_strategies = MagicMock(return_value=[])
+        result = _parse(tool.execute(action="list_strategies"))
+        assert result["count"] == 0
+
+
+# ------------------------------------------------------------------
+# Strategy performance and execution logging
+# ------------------------------------------------------------------
+
+
+class TestStrategyPerformance:
+    def test_returns_perf(self, tool, store):
+        store.get_strategy_performance = MagicMock(return_value={
+            "total_pnl": 500.0, "trade_count": 10,
+            "win_count": 7, "loss_count": 3,
+            "win_rate": 0.7, "avg_win": 100.0, "avg_loss": 50.0,
+            "max_drawdown": 200.0, "profit_factor": 4.67,
+        })
+        result = _parse(tool.execute(
+            action="strategy_performance", strategy_name="eth-rsi",
+        ))
+        assert result["performance"]["win_rate"] == 0.7
+        assert result["strategy_name"] == "eth-rsi"
+        assert result["network"] == "TESTNET"
+
+    def test_missing_name(self, tool):
+        result = _parse(tool.execute(action="strategy_performance"))
+        assert "error" in result
+
+
+class TestLogStrategyExecution:
+    def test_logs_execution(self, tool, mock_info, store):
+        mock_info.user_state.return_value = {
+            "marginSummary": {"totalRawUsd": "500"},
+        }
+        store.log_execution = MagicMock(return_value=7)
+        store.get_strategy = MagicMock(return_value={
+            "id": 1, "name": "eth-rsi",
+            "state": {"last_executed_at": None},
+            "updated_at": "t",
+        })
+        store.save_strategy = MagicMock(return_value=1)
+
+        result = _parse(tool.execute(
+            action="log_strategy_execution",
+            strategy_name="eth-rsi",
+            signals={"rsi": 28.5},
+            actions_taken={"action": "buy", "size": 0.1},
+            notes="RSI below threshold",
+        ))
+        assert result["logged"] is True
+        assert result["execution_id"] == 7
+        store.log_execution.assert_called_once()
+
+    def test_missing_name(self, tool):
+        result = _parse(tool.execute(action="log_strategy_execution"))
+        assert "error" in result
+
+    def test_handles_pnl_fetch_failure(self, tool, mock_info, store):
+        mock_info.user_state.side_effect = Exception("API error")
+        store.log_execution = MagicMock(return_value=8)
+        store.get_strategy = MagicMock(return_value={
+            "id": 1, "name": "test",
+            "state": {}, "updated_at": "t",
+        })
+        store.save_strategy = MagicMock(return_value=1)
+
+        result = _parse(tool.execute(
+            action="log_strategy_execution",
+            strategy_name="test",
+        ))
+        assert result["logged"] is True
+        # pnl_snapshot should be None since fetch failed
+        call_args = store.log_execution.call_args
+        assert call_args[1]["pnl_snapshot"] is None
+
+
+class TestStrategyExecutionLog:
+    def test_returns_executions(self, tool, store):
+        store.get_executions = MagicMock(return_value=[
+            {"id": 1, "strategy_name": "eth-rsi", "signals": {},
+             "actions": {}, "pnl_snapshot": 100, "notes": "",
+             "created_at": "2025-01-01T00:00:00+00:00"},
+        ])
+        result = _parse(tool.execute(
+            action="strategy_execution_log", strategy_name="eth-rsi",
+        ))
+        assert result["count"] == 1
+        assert result["strategy_name"] == "eth-rsi"
+
+    def test_missing_name(self, tool):
+        result = _parse(tool.execute(action="strategy_execution_log"))
+        assert "error" in result
+
+    def test_custom_limit(self, tool, store):
+        store.get_executions = MagicMock(return_value=[])
+        tool.execute(
+            action="strategy_execution_log", strategy_name="test", limit=5,
+        )
+        store.get_executions.assert_called_once_with("test", limit=5)

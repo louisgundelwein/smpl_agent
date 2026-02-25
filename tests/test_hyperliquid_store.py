@@ -195,3 +195,100 @@ def test_delete_strategy_not_found():
     store, db, conn, cursor = _make_store()
     cursor.rowcount = 0
     assert store.delete_strategy("ghost") is False
+
+
+# ------------------------------------------------------------------
+# Trade log — strategy_name support
+# ------------------------------------------------------------------
+
+
+def test_log_trade_with_strategy_name():
+    store, db, conn, cursor = _make_store()
+    cursor.fetchone.return_value = {"id": 50}
+    tid = store.log_trade(
+        coin="ETH", action="market_open", strategy_name="eth-rsi",
+    )
+    assert tid == 50
+    call_args = cursor.execute.call_args
+    assert "strategy_name" in call_args[0][0]
+
+
+# ------------------------------------------------------------------
+# Strategy execution log
+# ------------------------------------------------------------------
+
+
+def test_log_execution():
+    store, db, conn, cursor = _make_store()
+    cursor.fetchone.return_value = {"id": 10}
+    eid = store.log_execution(
+        strategy_name="eth-rsi",
+        signals={"rsi": 28.5},
+        actions={"action": "buy", "size": 0.1},
+        pnl_snapshot=150.0,
+        notes="RSI below 30, entering long",
+    )
+    assert eid == 10
+    conn.commit.assert_called()
+
+
+def test_log_execution_minimal():
+    store, db, conn, cursor = _make_store()
+    cursor.fetchone.return_value = {"id": 11}
+    eid = store.log_execution(strategy_name="btc-momentum")
+    assert eid == 11
+
+
+def test_get_executions():
+    store, db, conn, cursor = _make_store()
+    cursor.fetchall.return_value = [
+        {"id": 1, "strategy_name": "eth-rsi", "signals": {},
+         "actions": {}, "pnl_snapshot": 100, "notes": "",
+         "created_at": "2025-01-01T00:00:00+00:00"},
+    ]
+    execs = store.get_executions("eth-rsi", limit=10)
+    assert len(execs) == 1
+    call_args = cursor.execute.call_args
+    assert "strategy_name = %s" in call_args[0][0]
+
+
+def test_get_strategy_trades():
+    store, db, conn, cursor = _make_store()
+    cursor.fetchall.return_value = [
+        {"id": 1, "trade_id": "t1", "coin": "ETH", "action": "market_open",
+         "side": "buy", "size": 1, "price": 3000, "order_type": "market",
+         "pnl": None, "metadata": None,
+         "created_at": "2025-01-01T00:00:00+00:00", "strategy_name": "eth-rsi"},
+    ]
+    trades = store.get_strategy_trades("eth-rsi")
+    assert len(trades) == 1
+    call_args = cursor.execute.call_args
+    assert "strategy_name = %s" in call_args[0][0]
+
+
+def test_get_strategy_performance():
+    store, db, conn, cursor = _make_store()
+    cursor.fetchall.return_value = [
+        {"pnl": 100.0},
+        {"pnl": -50.0},
+        {"pnl": 200.0},
+        {"pnl": -30.0},
+    ]
+    perf = store.get_strategy_performance("eth-rsi")
+    assert perf["trade_count"] == 4
+    assert perf["total_pnl"] == 220.0
+    assert perf["win_count"] == 2
+    assert perf["loss_count"] == 2
+    assert perf["win_rate"] == 0.5
+    assert perf["avg_win"] == 150.0   # (100+200)/2
+    assert perf["avg_loss"] == 40.0   # (50+30)/2
+    assert perf["max_drawdown"] == 50.0  # peak at 100, dip to 50
+    assert perf["profit_factor"] == pytest.approx(300.0 / 80.0, abs=0.01)
+
+
+def test_get_strategy_performance_empty():
+    store, db, conn, cursor = _make_store()
+    cursor.fetchall.return_value = []
+    perf = store.get_strategy_performance("nonexistent")
+    assert perf["trade_count"] == 0
+    assert perf["total_pnl"] == 0.0

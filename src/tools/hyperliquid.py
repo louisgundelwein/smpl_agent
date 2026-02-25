@@ -57,6 +57,7 @@ class HyperliquidTool(Tool):
         max_position_size_usd: float = 10_000.0,
         max_loss_usd: float = 1_000.0,
         max_leverage: int = 20,
+        scheduler_store: Any | None = None,
     ) -> None:
         self._store = store
         self._address = wallet_address
@@ -65,6 +66,7 @@ class HyperliquidTool(Tool):
         self._max_loss_usd = max_loss_usd
         self._max_leverage = max_leverage
         self._rate_limiter = _RateLimiter()
+        self._scheduler_store = scheduler_store
 
         base_url = constants.TESTNET_API_URL if testnet else constants.MAINNET_API_URL
         account = Account.from_key(wallet_key)
@@ -95,17 +97,26 @@ class HyperliquidTool(Tool):
                             "enum": [
                                 "get_positions", "get_open_orders", "get_fills",
                                 "get_price", "get_orderbook", "get_candles",
+                                "get_indicators", "get_funding_rate", "get_account_summary",
                                 "place_order", "place_order_with_tpsl",
                                 "market_open", "market_close", "cancel_order",
                                 "set_leverage",
                                 "get_trade_history", "save_strategy", "get_strategy",
+                                "create_strategy", "activate_strategy", "deactivate_strategy",
+                                "delete_strategy", "list_strategies",
+                                "strategy_performance",
+                                "log_strategy_execution", "strategy_execution_log",
                             ],
                             "description": (
-                                "Action to perform. Info: get_positions, get_open_orders, get_fills. "
-                                "Market data: get_price, get_orderbook, get_candles. "
+                                "Action to perform. "
+                                "Info: get_positions, get_open_orders, get_fills, get_account_summary. "
+                                "Market data: get_price, get_orderbook, get_candles, get_indicators, get_funding_rate. "
                                 "Trading: place_order, place_order_with_tpsl, market_open, market_close, cancel_order. "
                                 "Config: set_leverage. "
-                                "Strategy: get_trade_history, save_strategy, get_strategy."
+                                "Strategy: get_trade_history, save_strategy, get_strategy, "
+                                "create_strategy, activate_strategy, deactivate_strategy, "
+                                "delete_strategy, list_strategies, strategy_performance, "
+                                "log_strategy_execution, strategy_execution_log."
                             ),
                         },
                         "coin": {
@@ -173,6 +184,54 @@ class HyperliquidTool(Tool):
                             "type": "object",
                             "description": "Strategy state JSON (for save_strategy).",
                         },
+                        "indicators": {
+                            "type": "array",
+                            "items": {"type": "object"},
+                            "description": (
+                                "List of indicator configs for get_indicators. "
+                                "Each: {\"name\": \"rsi\", \"period\": 14}. "
+                                "Available: sma, ema, macd, rsi, stochastic, "
+                                "bollinger_bands, atr, vwap, obv."
+                            ),
+                        },
+                        "description": {
+                            "type": "string",
+                            "description": "Strategy description (for create_strategy).",
+                        },
+                        "coins": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Coins the strategy trades (for create_strategy).",
+                        },
+                        "schedule": {
+                            "type": "string",
+                            "description": "Cron or interval for strategy execution (e.g. 'every 5m', '0 */4 * * *').",
+                        },
+                        "parameters": {
+                            "type": "object",
+                            "description": "Strategy parameters: entry/exit conditions, position sizing, risk management.",
+                        },
+                        "deliver_to": {
+                            "type": "string",
+                            "enum": ["memory", "telegram", "both"],
+                            "description": "Where to deliver strategy execution results (default: 'memory').",
+                        },
+                        "telegram_chat_id": {
+                            "type": "integer",
+                            "description": "Telegram chat ID for strategy result delivery.",
+                        },
+                        "signals": {
+                            "type": "object",
+                            "description": "Indicator signals at execution time (for log_strategy_execution).",
+                        },
+                        "actions_taken": {
+                            "type": "object",
+                            "description": "Actions taken during execution (for log_strategy_execution).",
+                        },
+                        "notes": {
+                            "type": "string",
+                            "description": "Agent reasoning notes (for log_strategy_execution).",
+                        },
                     },
                     "required": ["action"],
                 },
@@ -198,6 +257,12 @@ class HyperliquidTool(Tool):
                 return self._get_orderbook(kwargs)
             elif action == "get_candles":
                 return self._get_candles(kwargs)
+            elif action == "get_indicators":
+                return self._get_indicators(kwargs)
+            elif action == "get_funding_rate":
+                return self._get_funding_rate(kwargs)
+            elif action == "get_account_summary":
+                return self._get_account_summary()
             elif action == "place_order":
                 return self._place_order(kwargs)
             elif action == "place_order_with_tpsl":
@@ -216,6 +281,22 @@ class HyperliquidTool(Tool):
                 return self._save_strategy(kwargs)
             elif action == "get_strategy":
                 return self._get_strategy(kwargs)
+            elif action == "create_strategy":
+                return self._create_strategy(kwargs)
+            elif action == "activate_strategy":
+                return self._toggle_strategy(kwargs, active=True)
+            elif action == "deactivate_strategy":
+                return self._toggle_strategy(kwargs, active=False)
+            elif action == "delete_strategy":
+                return self._delete_strategy(kwargs)
+            elif action == "list_strategies":
+                return self._list_strategies()
+            elif action == "strategy_performance":
+                return self._strategy_performance(kwargs)
+            elif action == "log_strategy_execution":
+                return self._log_strategy_execution(kwargs)
+            elif action == "strategy_execution_log":
+                return self._strategy_execution_log(kwargs)
             else:
                 return json.dumps({"error": f"Unknown action: {action}"})
         except Exception as exc:
@@ -555,3 +636,331 @@ class HyperliquidTool(Tool):
         if strat is None:
             return json.dumps(self._tag({"error": f"Strategy '{name}' not found"}))
         return json.dumps(self._tag({"strategy": strat}), ensure_ascii=False)
+
+    # ------------------------------------------------------------------
+    # Market data (extended)
+    # ------------------------------------------------------------------
+
+    def _get_indicators(self, kw: dict) -> str:
+        coin = kw.get("coin")
+        if not coin:
+            return json.dumps({"error": "coin is required for get_indicators"})
+        indicators = kw.get("indicators")
+        if not indicators:
+            return json.dumps({"error": "indicators list is required for get_indicators"})
+        interval = kw.get("interval", "1h")
+        lookback_hours = kw.get("lookback_hours", 48)
+
+        now_ms = int(time.time() * 1000)
+        start_ms = now_ms - lookback_hours * 3600 * 1000
+
+        self._rate_limiter.wait_if_needed(20)
+        candles = self._info.candles_snapshot(coin, interval, start_ms, now_ms)
+
+        if not candles:
+            return json.dumps(self._tag({"error": f"No candle data for {coin}"}))
+
+        from src.indicators import compute_indicators
+        results = compute_indicators(candles, indicators, history_length=10)
+
+        current_price = float(candles[-1]["c"])
+        return json.dumps(self._tag({
+            "coin": coin,
+            "interval": interval,
+            "current_price": current_price,
+            "candle_count": len(candles),
+            "indicators": results,
+        }), ensure_ascii=False)
+
+    def _get_funding_rate(self, kw: dict) -> str:
+        coin = kw.get("coin")
+        if not coin:
+            return json.dumps({"error": "coin is required for get_funding_rate"})
+
+        self._rate_limiter.wait_if_needed(20)
+        meta_ctx = self._info.meta_and_asset_ctxs()
+
+        universe = meta_ctx[0]["universe"]
+        asset_ctxs = meta_ctx[1]
+
+        for i, asset_info in enumerate(universe):
+            if asset_info["name"] == coin:
+                ctx = asset_ctxs[i]
+                funding = float(ctx.get("funding", "0"))
+                premium = float(ctx.get("premium", "0")) if ctx.get("premium") else None
+                annualized = funding * 8760 * 100  # as percentage
+                return json.dumps(self._tag({
+                    "coin": coin,
+                    "current_funding_rate": funding,
+                    "current_funding_rate_pct": f"{funding * 100:.4f}%",
+                    "predicted_premium": premium,
+                    "annualized_rate_pct": f"{annualized:.2f}%",
+                    "mark_price": ctx.get("markPx"),
+                    "oracle_price": ctx.get("oraclePx"),
+                    "open_interest": ctx.get("openInterest"),
+                }), ensure_ascii=False)
+
+        return json.dumps(self._tag({"error": f"Coin {coin} not found in metadata"}))
+
+    def _get_account_summary(self) -> str:
+        self._rate_limiter.wait_if_needed(20)
+        state = self._info.user_state(self._address)
+
+        margin = state.get("marginSummary", {})
+        positions = state.get("assetPositions", [])
+
+        active_positions = []
+        total_unrealized = 0.0
+        for pos in positions:
+            entry = pos.get("position", {})
+            szi = float(entry.get("szi", "0"))
+            if szi != 0:
+                unrealized = float(entry.get("unrealizedPnl", "0"))
+                total_unrealized += unrealized
+                active_positions.append({
+                    "coin": entry.get("coin"),
+                    "size": szi,
+                    "entry_price": entry.get("entryPx"),
+                    "unrealized_pnl": unrealized,
+                    "leverage": entry.get("leverage"),
+                })
+
+        # Daily PnL from trade log
+        today_start = datetime.now(timezone.utc).replace(
+            hour=0, minute=0, second=0, microsecond=0,
+        )
+        today_trades = self._store.get_trades(after=today_start)
+        daily_realized_pnl = sum(t.get("pnl", 0) or 0 for t in today_trades)
+
+        return json.dumps(self._tag({
+            "account_value": margin.get("accountValue"),
+            "total_margin_used": margin.get("totalMarginUsed"),
+            "total_raw_usd": margin.get("totalRawUsd"),
+            "withdrawable": state.get("withdrawable"),
+            "active_positions": active_positions,
+            "position_count": len(active_positions),
+            "total_unrealized_pnl": total_unrealized,
+            "daily_realized_pnl": daily_realized_pnl,
+            "daily_total_pnl": daily_realized_pnl + total_unrealized,
+        }), ensure_ascii=False)
+
+    # ------------------------------------------------------------------
+    # Strategy lifecycle
+    # ------------------------------------------------------------------
+
+    def _create_strategy(self, kw: dict) -> str:
+        name = kw.get("strategy_name")
+        description = kw.get("description", "")
+        coins = kw.get("coins", [])
+        schedule = kw.get("schedule")
+        parameters = kw.get("parameters", {})
+        deliver_to = kw.get("deliver_to", "memory")
+        telegram_chat_id = kw.get("telegram_chat_id")
+
+        if not name:
+            return json.dumps({"error": "strategy_name is required"})
+        if not schedule:
+            return json.dumps({"error": "schedule is required for create_strategy"})
+
+        # Validate schedule
+        from src.scheduler import compute_next_run
+        try:
+            compute_next_run(schedule)
+        except Exception as exc:
+            return json.dumps({"error": f"Invalid schedule: {exc}"})
+
+        scheduler_task_name = f"strategy-{name}"
+        now = datetime.now(timezone.utc).isoformat()
+
+        strategy_state = {
+            "description": description,
+            "coins": coins,
+            "status": "active",
+            "schedule": schedule,
+            "scheduler_task_name": scheduler_task_name,
+            "parameters": parameters,
+            "runtime_state": {},
+            "created_at": now,
+            "last_executed_at": None,
+        }
+
+        sid = self._store.save_strategy(name, strategy_state)
+
+        prompt = self._build_strategy_prompt(name, strategy_state)
+
+        scheduler_result = None
+        if self._scheduler_store:
+            try:
+                task_id = self._scheduler_store.add(
+                    name=scheduler_task_name,
+                    prompt=prompt,
+                    cron_expression=schedule,
+                    deliver_to=deliver_to,
+                    telegram_chat_id=telegram_chat_id,
+                )
+                task = self._scheduler_store.get(scheduler_task_name)
+                scheduler_result = {
+                    "task_id": task_id,
+                    "next_run_at": task["next_run_at"] if task else None,
+                }
+            except Exception as exc:
+                scheduler_result = {"error": str(exc)}
+
+        return json.dumps(self._tag({
+            "created": True,
+            "strategy_id": sid,
+            "name": name,
+            "schedule": schedule,
+            "scheduler_task": scheduler_result,
+        }), ensure_ascii=False)
+
+    def _build_strategy_prompt(self, name: str, state: dict) -> str:
+        """Build the prompt the scheduler uses to trigger strategy execution."""
+        coins_str = ", ".join(state.get("coins", [])) or "as defined in strategy"
+        params_str = json.dumps(state.get("parameters", {}))
+        return (
+            f"[Strategy execution '{name}']: Execute the trading strategy '{name}'.\n\n"
+            f"Strategy: {state.get('description', 'No description')}\n"
+            f"Coins: {coins_str}\n"
+            f"Parameters: {params_str}\n\n"
+            f"Instructions:\n"
+            f"1. Load current strategy state: hyperliquid get_strategy (strategy_name='{name}')\n"
+            f"2. Check market conditions: hyperliquid get_indicators for each coin\n"
+            f"3. Check account: hyperliquid get_account_summary\n"
+            f"4. Evaluate signals against strategy parameters\n"
+            f"5. Execute trades if entry/exit conditions are met\n"
+            f"6. Log execution: hyperliquid log_strategy_execution\n"
+            f"7. Update runtime state: hyperliquid save_strategy\n"
+        )
+
+    def _toggle_strategy(self, kw: dict, active: bool) -> str:
+        name = kw.get("strategy_name")
+        if not name:
+            return json.dumps({"error": "strategy_name is required"})
+
+        strat = self._store.get_strategy(name)
+        if not strat:
+            return json.dumps(self._tag({"error": f"Strategy '{name}' not found"}))
+
+        state = strat["state"]
+        state["status"] = "active" if active else "inactive"
+        self._store.save_strategy(name, state)
+
+        scheduler_toggled = False
+        task_name = state.get("scheduler_task_name")
+        if task_name and self._scheduler_store:
+            scheduler_toggled = self._scheduler_store.toggle(task_name, enabled=active)
+
+        action_word = "activated" if active else "deactivated"
+        return json.dumps(self._tag({
+            action_word: True,
+            "name": name,
+            "status": state["status"],
+            "scheduler_toggled": scheduler_toggled,
+        }))
+
+    def _delete_strategy(self, kw: dict) -> str:
+        name = kw.get("strategy_name")
+        if not name:
+            return json.dumps({"error": "strategy_name is required"})
+
+        strat = self._store.get_strategy(name)
+        scheduler_deleted = False
+        if strat:
+            state = strat["state"]
+            task_name = state.get("scheduler_task_name")
+            if task_name and self._scheduler_store:
+                scheduler_deleted = self._scheduler_store.delete(task_name)
+
+        deleted = self._store.delete_strategy(name)
+        return json.dumps(self._tag({
+            "deleted": deleted,
+            "name": name,
+            "scheduler_deleted": scheduler_deleted,
+        }))
+
+    def _list_strategies(self) -> str:
+        strats = self._store.list_strategies()
+        enriched = []
+        for s in strats:
+            full = self._store.get_strategy(s["name"])
+            state = full["state"] if full else {}
+            enriched.append({
+                "name": s["name"],
+                "description": state.get("description", ""),
+                "status": state.get("status", "unknown"),
+                "coins": state.get("coins", []),
+                "schedule": state.get("schedule", ""),
+                "last_executed_at": state.get("last_executed_at"),
+                "updated_at": s.get("updated_at"),
+            })
+        return json.dumps(self._tag({
+            "strategies": enriched,
+            "count": len(enriched),
+        }), ensure_ascii=False)
+
+    # ------------------------------------------------------------------
+    # Strategy performance and execution logging
+    # ------------------------------------------------------------------
+
+    def _strategy_performance(self, kw: dict) -> str:
+        name = kw.get("strategy_name")
+        if not name:
+            return json.dumps({"error": "strategy_name is required"})
+        perf = self._store.get_strategy_performance(name)
+        return json.dumps(self._tag({
+            "strategy_name": name,
+            "performance": perf,
+        }), ensure_ascii=False)
+
+    def _log_strategy_execution(self, kw: dict) -> str:
+        name = kw.get("strategy_name")
+        if not name:
+            return json.dumps({"error": "strategy_name is required"})
+
+        signals = kw.get("signals")
+        actions = kw.get("actions_taken")
+        notes = kw.get("notes")
+
+        # Snapshot current PnL
+        pnl_snapshot = None
+        try:
+            self._rate_limiter.wait_if_needed(20)
+            state = self._info.user_state(self._address)
+            margin = state.get("marginSummary", {})
+            pnl_snapshot = float(margin.get("totalRawUsd", 0))
+        except Exception:
+            pass
+
+        eid = self._store.log_execution(
+            strategy_name=name,
+            signals=signals,
+            actions=actions,
+            pnl_snapshot=pnl_snapshot,
+            notes=notes,
+        )
+
+        # Update last_executed_at
+        strat = self._store.get_strategy(name)
+        if strat:
+            st = strat["state"]
+            st["last_executed_at"] = datetime.now(timezone.utc).isoformat()
+            self._store.save_strategy(name, st)
+
+        return json.dumps(self._tag({
+            "logged": True,
+            "execution_id": eid,
+            "strategy_name": name,
+        }))
+
+    def _strategy_execution_log(self, kw: dict) -> str:
+        name = kw.get("strategy_name")
+        if not name:
+            return json.dumps({"error": "strategy_name is required"})
+        limit = kw.get("limit", 20)
+        executions = self._store.get_executions(name, limit=limit)
+        return json.dumps(self._tag({
+            "strategy_name": name,
+            "executions": executions,
+            "count": len(executions),
+        }), ensure_ascii=False)

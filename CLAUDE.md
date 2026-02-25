@@ -122,6 +122,9 @@ All configuration comes from `.env` (never committed). See `.env.example` for th
 - Generate an API wallet at https://app.hyperliquid.xyz/API (mainnet) or https://app.hyperliquid-testnet.xyz/API (testnet)
 - Safety: testnet default, position size limit, daily loss limit, leverage cap, rate limiting (1200 weight/min)
 
+### Auto-Continuation
+- `AGENT_MAX_CONTINUATIONS` -- Max continuation nudges per run() call (default: `20`, set `0` to disable)
+
 ### Subagents
 - `MAX_SUBAGENTS` -- Maximum concurrent subagents (default: `10`)
 - `SUBAGENT_TOOL_ROUNDS` -- Max tool rounds per subagent (default: `15`)

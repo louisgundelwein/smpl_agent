@@ -89,6 +89,23 @@ class SubagentResultsCollectedEvent:
     duration_ms: int
 
 
+@dataclass(frozen=True)
+class AutoMemoryStoredEvent:
+    """Emitted when auto-memory stores a new memory."""
+
+    content: str  # First ~100 chars of stored content
+    tags: list[str]
+    source: str  # "conversation_end" or "turn_extraction"
+
+
+@dataclass(frozen=True)
+class ContinuationEvent:
+    """Emitted when the agent injects a continuation nudge."""
+
+    continuation_number: int
+    max_continuations: int
+
+
 AgentEvent = (
     ToolStartEvent
     | ToolEndEvent
@@ -100,6 +117,8 @@ AgentEvent = (
     | SubagentStatusEvent
     | SubagentWaitEvent
     | SubagentResultsCollectedEvent
+    | AutoMemoryStoredEvent
+    | ContinuationEvent
 )
 
 EventCallback = Callable[[AgentEvent], None]

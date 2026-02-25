@@ -37,7 +37,18 @@
       "Bash(find:*)",
       "Bash(/Users/louisgundelwein/Code/smpl_agent/.venv/bin/pip install:*)",
       "Bash(/Users/louisgundelwein/Code/smpl_agent/.venv/bin/python -m pip install:*)",
-      "Bash(/Users/louisgundelwein/Code/smpl_agent/.venv/bin/python:*)"
+      "Bash(/Users/louisgundelwein/Code/smpl_agent/.venv/bin/python:*)",
+      "Bash(.venv/bin/python:*)",
+      "WebSearch",
+      "Bash(make help:*)",
+      "Bash(make setup:*)",
+      "Bash(git pull:*)",
+      "Bash(git stash:*)",
+      "mcp__Desktop_Commander__start_search",
+      "mcp__Desktop_Commander__get_more_search_results",
+      "Bash(/Users/louisgundelwein/Code/smpl_agent/.venv/bin/pytest:*)",
+      "Bash(pip show:*)",
+      "Bash(pip3 list:*)"
     ]
   }
 }

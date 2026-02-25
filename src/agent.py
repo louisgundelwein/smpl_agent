@@ -4,10 +4,12 @@ import json
 import time
 from typing import Any
 
+from src.auto_memory import AutoMemory
 from src.context import ContextManager
 from src.history import ConversationHistory
 from src.events import (
     ContextCompressedEvent,
+    ContinuationEvent,
     EventEmitter,
     LLMEndEvent,
     LLMStartEvent,
@@ -32,6 +34,12 @@ SYSTEM_PROMPT = (
 )
 
 MAX_TOOL_ROUNDS = 10
+MAX_CONTINUATIONS = 20
+
+CONTINUATION_PROMPT = (
+    "[Continue with the next step. Use your tools to take action. "
+    "If all tasks are complete, provide your final summary.]"
+)
 
 
 def _estimate_tokens(messages: list[dict[str, Any]]) -> int:
@@ -54,18 +62,22 @@ class Agent:
         registry: ToolRegistry,
         system_prompt: str = SYSTEM_PROMPT,
         max_tool_rounds: int = MAX_TOOL_ROUNDS,
+        max_continuations: int = MAX_CONTINUATIONS,
         emitter: EventEmitter | None = None,
         context_manager: ContextManager | None = None,
         history: ConversationHistory | None = None,
         subagent_manager: SubagentManager | None = None,
+        auto_memory: AutoMemory | None = None,
     ) -> None:
         self._llm = llm
         self._registry = registry
         self._max_tool_rounds = max_tool_rounds
+        self._max_continuations = max_continuations
         self._emitter = emitter or EventEmitter()
         self._context_manager = context_manager
         self._history = history
         self._subagent_manager = subagent_manager
+        self._auto_memory = auto_memory
 
         # Load persisted conversation or start fresh.
         # Always replace the system prompt with the current one
@@ -95,13 +107,17 @@ class Agent:
         Returns the agent's final text response.
 
         Raises:
-            RuntimeError: If tool execution exceeds max_tool_rounds.
+            RuntimeError: If execution exceeds maximum rounds.
         """
         self._messages.append({"role": "user", "content": user_input})
 
         tool_schemas = self._registry.get_schemas()
 
-        for round_num in range(1, self._max_tool_rounds + 1):
+        continuations_used = 0
+        consecutive_text = 0
+        total_rounds = self._max_tool_rounds + self._max_continuations
+
+        for round_num in range(1, total_rounds + 1):
             if self._context_manager:
                 original_count = len(self._messages)
                 original_tokens = self._context_manager.estimate_tokens(
@@ -150,6 +166,8 @@ class Agent:
             self._messages.append(message.model_dump(exclude_none=True))
 
             if not message.tool_calls:
+                consecutive_text += 1
+
                 # If subagents are still running, wait for them and
                 # re-enter the loop so the LLM can synthesize results.
                 active = (
@@ -176,10 +194,36 @@ class Agent:
                             "content": self._format_subagent_results(results),
                         }
                     )
+                    consecutive_text = 0
+                    continue
+
+                # Auto-continue: nudge the LLM to keep working if it
+                # returned text without using tools and hasn't given
+                # two consecutive text-only responses.
+                if (
+                    self._max_continuations > 0
+                    and continuations_used < self._max_continuations
+                    and consecutive_text < 2
+                ):
+                    continuations_used += 1
+                    self._emitter.emit(
+                        ContinuationEvent(
+                            continuation_number=continuations_used,
+                            max_continuations=self._max_continuations,
+                        )
+                    )
+                    self._messages.append(
+                        {"role": "user", "content": CONTINUATION_PROMPT}
+                    )
                     continue
 
                 self._save_history()
+                if self._auto_memory:
+                    self._auto_memory.on_turn_end(list(self._messages))
                 return message.content or ""
+
+            # Tool calls executed — reset consecutive text counter.
+            consecutive_text = 0
 
             for tool_call in message.tool_calls:
                 func_name = tool_call.function.name
@@ -209,7 +253,7 @@ class Agent:
                 )
 
         raise RuntimeError(
-            f"Agent exceeded maximum tool rounds ({self._max_tool_rounds})"
+            f"Agent exceeded maximum rounds ({total_rounds})"
         )
 
     @staticmethod
@@ -246,6 +290,8 @@ class Agent:
 
     def reset(self) -> None:
         """Clear conversation history, keeping only the system prompt."""
+        if self._auto_memory:
+            self._auto_memory.on_conversation_end(list(self._messages))
         self._messages = [self._messages[0]]
         if self._history:
             self._history.clear()

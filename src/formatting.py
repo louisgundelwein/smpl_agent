@@ -4,7 +4,9 @@ from typing import Any
 
 from src.events import (
     AgentEvent,
+    AutoMemoryStoredEvent,
     ContextCompressedEvent,
+    ContinuationEvent,
     LLMEndEvent,
     LLMStartEvent,
     SubagentResultsCollectedEvent,
@@ -53,6 +55,14 @@ def format_event(event: AgentEvent) -> str | None:
         return f"  [subagent] waiting for {event.active_count} subagent(s) to finish..."
     elif isinstance(event, SubagentResultsCollectedEvent):
         return f"  [subagent] collected {event.count} result(s) ({event.duration_ms}ms)"
+    elif isinstance(event, AutoMemoryStoredEvent):
+        preview = event.content[:80].replace("\n", " ")
+        return f"  [memory] auto-stored: {preview}..."
+    elif isinstance(event, ContinuationEvent):
+        return (
+            f"  [continue] auto-continuing "
+            f"({event.continuation_number}/{event.max_continuations})"
+        )
     return None
 
 
@@ -116,6 +126,14 @@ def format_message(msg: dict[str, Any]) -> str | None:
         return (
             f"  [subagent] collected {msg.get('count', '?')} result(s) "
             f"({msg.get('duration_ms', '?')}ms)"
+        )
+    elif msg_type == "auto_memory_stored":
+        preview = msg.get("content", "")[:80].replace("\n", " ")
+        return f"  [memory] auto-stored: {preview}..."
+    elif msg_type == "continuation":
+        return (
+            f"  [continue] auto-continuing "
+            f"({msg.get('continuation_number', '?')}/{msg.get('max_continuations', '?')})"
         )
 
     return None

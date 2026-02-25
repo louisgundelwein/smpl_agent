@@ -31,6 +31,7 @@ class Config:
     github_token: str | None
     whisper_model: str
     max_tool_rounds: int
+    max_continuations: int
     daemon_pid_path: str
     daemon_log_path: str
     scheduler_poll_interval: int
@@ -43,6 +44,8 @@ class Config:
     hyperliquid_max_position_usd: float
     hyperliquid_max_loss_usd: float
     hyperliquid_max_leverage: int
+    auto_memory: bool
+    auto_memory_extract_interval: int
 
     @classmethod
     def from_env(cls, env_path: str = ".env") -> "Config":
@@ -86,6 +89,7 @@ class Config:
         github_token = os.getenv("GITHUB_TOKEN") or None
         whisper_model = os.getenv("WHISPER_MODEL", "openai/whisper-large-v3-turbo")
         max_tool_rounds = int(os.getenv("MAX_TOOL_ROUNDS", "25"))
+        max_continuations = int(os.getenv("AGENT_MAX_CONTINUATIONS", "20"))
         daemon_pid_path = os.getenv("DAEMON_PID_PATH", "agent.pid")
         daemon_log_path = os.getenv("DAEMON_LOG_PATH", "agent.log")
         scheduler_poll_interval = int(os.getenv("SCHEDULER_POLL_INTERVAL", "30"))
@@ -98,6 +102,8 @@ class Config:
         hyperliquid_max_position_usd = float(os.getenv("HYPERLIQUID_MAX_POSITION_USD", "10000"))
         hyperliquid_max_loss_usd = float(os.getenv("HYPERLIQUID_MAX_LOSS_USD", "1000"))
         hyperliquid_max_leverage = int(os.getenv("HYPERLIQUID_MAX_LEVERAGE", "20"))
+        auto_memory = os.getenv("AUTO_MEMORY", "true").lower() in ("true", "1", "yes")
+        auto_memory_extract_interval = int(os.getenv("AUTO_MEMORY_EXTRACT_INTERVAL", "3"))
 
         if not openai_key:
             raise ValueError("OPENAI_API_KEY is required")
@@ -128,6 +134,7 @@ class Config:
             github_token=github_token,
             whisper_model=whisper_model,
             max_tool_rounds=max_tool_rounds,
+            max_continuations=max_continuations,
             daemon_pid_path=daemon_pid_path,
             daemon_log_path=daemon_log_path,
             scheduler_poll_interval=scheduler_poll_interval,
@@ -140,4 +147,6 @@ class Config:
             hyperliquid_max_position_usd=hyperliquid_max_position_usd,
             hyperliquid_max_loss_usd=hyperliquid_max_loss_usd,
             hyperliquid_max_leverage=hyperliquid_max_leverage,
+            auto_memory=auto_memory,
+            auto_memory_extract_interval=auto_memory_extract_interval,
         )

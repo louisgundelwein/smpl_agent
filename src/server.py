@@ -9,7 +9,9 @@ from typing import Any
 from src.agent import Agent
 from src.events import (
     AgentEvent,
+    AutoMemoryStoredEvent,
     ContextCompressedEvent,
+    ContinuationEvent,
     LLMEndEvent,
     LLMStartEvent,
     SubagentResultsCollectedEvent,
@@ -91,6 +93,19 @@ def _event_to_message(event: AgentEvent) -> dict[str, Any]:
             "type": "subagent_results_collected",
             "count": event.count,
             "duration_ms": event.duration_ms,
+        }
+    elif isinstance(event, AutoMemoryStoredEvent):
+        return {
+            "type": "auto_memory_stored",
+            "content": event.content,
+            "tags": event.tags,
+            "source": event.source,
+        }
+    elif isinstance(event, ContinuationEvent):
+        return {
+            "type": "continuation",
+            "continuation_number": event.continuation_number,
+            "max_continuations": event.max_continuations,
         }
     # Defensive: log unknown event types instead of crashing
     logger.warning("Unknown event type: %s", type(event).__name__)

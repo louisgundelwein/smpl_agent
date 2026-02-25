@@ -77,7 +77,7 @@ def _make_chat_response(content, tool_calls=None):
             self.content = content
             self.tool_calls = tool_calls
 
-        def model_dump(self):
+        def model_dump(self, **kwargs):
             d = {"role": "assistant", "content": self.content}
             if self.tool_calls:
                 d["tool_calls"] = [
@@ -91,6 +91,8 @@ def _make_chat_response(content, tool_calls=None):
                     }
                     for tc in self.tool_calls
                 ]
+            if kwargs.get("exclude_none"):
+                d = {k: v for k, v in d.items() if v is not None}
             return d
 
     class _Choice:
@@ -187,7 +189,7 @@ def _recv_one(sock, timeout=5.0):
 def test_ping_pong():
     llm = FakeLLM([_text_response("hi")])
     registry = ToolRegistry()
-    agent = Agent(llm=llm, registry=registry)
+    agent = Agent(llm=llm, registry=registry, max_continuations=0)
     server = _start_server(agent)
 
     sock = _connect(server.port)
@@ -203,7 +205,7 @@ def test_ping_pong():
 def test_run_and_response():
     llm = FakeLLM([_text_response("Hello back!")])
     registry = ToolRegistry()
-    agent = Agent(llm=llm, registry=registry)
+    agent = Agent(llm=llm, registry=registry, max_continuations=0)
     server = _start_server(agent)
 
     sock = _connect(server.port)
@@ -222,7 +224,7 @@ def test_tool_events_forwarded():
     llm = FakeLLM(responses)
     registry = ToolRegistry()
     registry.register(EchoTool())
-    agent = Agent(llm=llm, registry=registry)
+    agent = Agent(llm=llm, registry=registry, max_continuations=0)
     server = _start_server(agent)
 
     sock = _connect(server.port)
@@ -256,7 +258,7 @@ def test_tool_events_forwarded():
 def test_reset():
     llm = FakeLLM([_text_response("first"), _text_response("second")])
     registry = ToolRegistry()
-    agent = Agent(llm=llm, registry=registry)
+    agent = Agent(llm=llm, registry=registry, max_continuations=0)
     server = _start_server(agent)
 
     sock = _connect(server.port)
@@ -280,7 +282,7 @@ def test_reset():
 def test_client_disconnect_preserves_agent():
     llm = FakeLLM([_text_response("first"), _text_response("second")])
     registry = ToolRegistry()
-    agent = Agent(llm=llm, registry=registry)
+    agent = Agent(llm=llm, registry=registry, max_continuations=0)
     server = _start_server(agent)
 
     # First connection — send a message
@@ -307,7 +309,7 @@ def test_client_disconnect_preserves_agent():
 def test_second_client_gets_busy():
     llm = FakeLLM([_text_response("hi")])
     registry = ToolRegistry()
-    agent = Agent(llm=llm, registry=registry)
+    agent = Agent(llm=llm, registry=registry, max_continuations=0)
     server = _start_server(agent)
 
     sock1 = _connect(server.port)
@@ -326,7 +328,7 @@ def test_second_client_gets_busy():
 def test_unknown_message_type():
     llm = FakeLLM([_text_response("hi")])
     registry = ToolRegistry()
-    agent = Agent(llm=llm, registry=registry)
+    agent = Agent(llm=llm, registry=registry, max_continuations=0)
     server = _start_server(agent)
 
     sock = _connect(server.port)
@@ -343,7 +345,7 @@ def test_unknown_message_type():
 def test_empty_run_ignored():
     llm = FakeLLM([_text_response("hi")])
     registry = ToolRegistry()
-    agent = Agent(llm=llm, registry=registry)
+    agent = Agent(llm=llm, registry=registry, max_continuations=0)
     server = _start_server(agent)
 
     sock = _connect(server.port)

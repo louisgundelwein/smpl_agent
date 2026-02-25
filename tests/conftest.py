@@ -62,12 +62,21 @@ def mock_config():
         github_token="test-github-token",
         whisper_model="openai/whisper-large-v3-turbo",
         max_tool_rounds=25,
+        max_continuations=20,
         daemon_pid_path="test_agent.pid",
         daemon_log_path="test_agent.log",
         scheduler_poll_interval=30,
         scheduler_tasks="",
         max_subagents=10,
         subagent_tool_rounds=15,
+        hyperliquid_wallet_key=None,
+        hyperliquid_wallet_address=None,
+        hyperliquid_testnet=True,
+        hyperliquid_max_position_usd=10000.0,
+        hyperliquid_max_loss_usd=1000.0,
+        hyperliquid_max_leverage=20,
+        auto_memory=True,
+        auto_memory_extract_interval=3,
     )
 
 
