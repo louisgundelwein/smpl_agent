@@ -11,12 +11,19 @@ A minimal, extensible AI agent that runs in your terminal. It connects to any Op
 - **GitHub integration** — manage repos, issues, pull requests, and files via the GitHub REST API
 - **Web search** — built-in Brave Search integration with source citations
 - **Persistent memory** — semantic memory across sessions via SQLite + vector embeddings
+- **Calendar management** — create, list, update, and delete events on any CalDAV server (Nextcloud, iCloud, Google Calendar)
+- **Email** — read, search, and send emails via IMAP/SMTP (Gmail, Outlook, or any generic provider)
+- **Scheduled tasks** — cron-based recurring tasks with delivery to memory or Telegram
+- **Repository registry** — track known repos so the agent can find and work on them without asking
+- **Subagents** — spawn concurrent background agents for parallel task execution
+- **Voice messages** — send voice messages via Telegram, transcribed locally with Whisper
+- **Customizable personality** — edit `SOUL.md` to change the agent's character, values, and communication style
 - **Conversation persistence** — conversation history survives restarts via atomic JSON file writes
 - **Automatic context management** — long conversations are automatically compressed so the context window never fills up
 - **Tool system** — add new tools in two steps: create a class, register it
 - **Daemon mode** — run the agent as a background server, attach/detach without losing conversation
 - **Telegram integration** — talk to your agent from Telegram with shared conversation history
-- **223 tests** — full coverage, no real HTTP/LLM calls, fast
+- **481 tests** — full coverage, no real HTTP/LLM calls, fast
 
 ## Quick Start
 
@@ -89,12 +96,63 @@ All config lives in `.env` (gitignored). Copy `.env.example` and fill in your ke
 |---|---|---|---|
 | `HISTORY_PATH` | no | `conversation_history.json` | Path to the conversation history file |
 
+### Scheduled Tasks
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `SCHEDULER_DB_PATH` | no | `scheduler.db` | SQLite database for scheduled tasks |
+| `SCHEDULER_POLL_INTERVAL` | no | `30` | Seconds between scheduler polls |
+| `SCHEDULER_TASKS` | no | — | Static tasks as JSON array, loaded on startup (see [Scheduled Tasks](#scheduled-tasks)) |
+
+### Repository Registry
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `REPOS_DB_PATH` | no | `repos.db` | SQLite database for known repositories |
+
+### Calendar (CalDAV)
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `CALENDAR_DB_PATH` | no | `calendar.db` | SQLite database for CalDAV connections |
+
+### Email (IMAP/SMTP)
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `EMAIL_DB_PATH` | no | `email.db` | SQLite database for email accounts |
+
+### Subagents
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `MAX_SUBAGENTS` | no | `10` | Maximum concurrent subagents |
+| `SUBAGENT_TOOL_ROUNDS` | no | `15` | Max tool rounds per subagent |
+
+### Voice Transcription
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `WHISPER_MODEL` | no | `openai/whisper-large-v3-turbo` | HuggingFace Whisper model ID |
+
+Dependencies (`torch`, `transformers`, `accelerate`, `imageio-ffmpeg`) are auto-installed on first voice message. Pre-install with `pip install -e ".[transcription]"` to avoid the first-use delay.
+
+### Personality
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `SOUL_PATH` | no | `SOUL.md` | Path to the agent's personality/system-prompt file |
+
+Edit `SOUL.md` to change the agent's name, communication style, values, and behavior.
+
 ### Daemon / Telegram
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `AGENT_HOST` | no | `127.0.0.1` | Daemon bind address |
 | `AGENT_PORT` | no | `7600` | Daemon port |
+| `DAEMON_PID_PATH` | no | `agent.pid` | PID file location |
+| `DAEMON_LOG_PATH` | no | `agent.log` | Log file location |
 | `TELEGRAM_BOT_TOKEN` | no | — | Telegram bot token from [@BotFather](https://t.me/BotFather) |
 | `TELEGRAM_ALLOWED_CHAT_IDS` | no | — | Comma-separated chat IDs (empty = allow all) |
 
@@ -170,7 +228,9 @@ The log path is configurable via `DAEMON_LOG_PATH` in `.env` (default: `agent.lo
 3. Optionally restrict access with `TELEGRAM_ALLOWED_CHAT_IDS`
 4. Start the daemon: `python -m src.main serve`
 
-The Telegram bot and CLI share the same conversation history.
+The Telegram bot and CLI share the same conversation history. You can send text messages, voice messages (transcribed via Whisper), and use swipe-to-reply to give the agent context from previous messages.
+
+Long responses are automatically split into multiple messages to stay within Telegram's 4096-character limit.
 
 ## Shell Access
 
@@ -260,6 +320,210 @@ Agent: Created issue #42: Memory leak in long sessions
 ```
 
 If `GITHUB_TOKEN` is not set, the tool is simply not registered — no error, no crash.
+
+## Scheduled Tasks
+
+The agent can run tasks automatically on a cron schedule via the `scheduler` tool. Useful for recurring checks, reports, or maintenance.
+
+```
+You: Check my open PRs every morning at 9am and send the results to Telegram
+  [tool] scheduler(action='create', name='daily-prs', prompt='Check open PRs on all my repos', schedule='0 9 * * *', deliver_to='telegram', telegram_chat_id=12345)
+  [tool] done
+
+Agent: Created scheduled task "daily-prs". It will run daily at 9:00 UTC.
+```
+
+### Schedule formats
+
+- **Cron expressions**: `0 9 * * *` (daily at 9am), `*/30 * * * *` (every 30 minutes), `0 0 * * 1` (Monday midnight)
+- **Simple intervals**: `every 6h`, `every 30m`, `every 1d`
+
+All times are UTC.
+
+### Delivery
+
+Results can be delivered to:
+- `memory` (default) — stored in the agent's persistent memory
+- `telegram` — sent to a Telegram chat (requires `telegram_chat_id`)
+- `both` — stored in memory and sent to Telegram
+
+### Management
+
+```
+You: Show me all scheduled tasks
+  [tool] scheduler(action='list')
+
+You: Disable the daily-prs task
+  [tool] scheduler(action='disable', name='daily-prs')
+
+You: Delete it
+  [tool] scheduler(action='delete', name='daily-prs')
+```
+
+Static tasks can be pre-loaded via the `SCHEDULER_TASKS` environment variable:
+
+```env
+SCHEDULER_TASKS=[{"name":"daily-prs","prompt":"Check open PRs","schedule":"0 9 * * *","deliver_to":"telegram","telegram_chat_id":12345}]
+```
+
+## Repository Registry
+
+The agent maintains a list of known repositories via the `repos` tool. When you mention a repo or ask the agent to work on one, it checks its registry first — no need to repeat URLs or branch names.
+
+```
+You: Remember the smpl_agent repo
+  [tool] repos(action='add', name='smpl_agent', owner='louisgundelwein', repo='smpl_agent', url='https://github.com/louisgundelwein/smpl_agent.git', default_branch='main')
+  [tool] done
+
+Agent: Registered smpl_agent.
+```
+
+```
+You: What repos do I have?
+  [tool] repos(action='list')
+
+Agent: You have 3 repos registered: smpl_agent, my-website, data-pipeline.
+```
+
+Each repo stores: name, GitHub owner/repo, clone URL, default branch, description, and tags. The agent uses this when cloning, creating branches, or opening PRs.
+
+## Calendar Management
+
+The agent can manage calendars and events via the `calendar` tool using the CalDAV protocol. It works with Nextcloud, iCloud, Google Calendar, and any CalDAV-compatible server.
+
+### Setup
+
+Register a CalDAV connection first:
+
+```
+You: Connect to my Nextcloud calendar
+  [tool] calendar(action='add_connection', name='nextcloud', url='https://cloud.example.com/remote.php/dav', username='alice', password='app-password', provider='nextcloud')
+  [tool] done
+
+Agent: Connected to your Nextcloud CalDAV server.
+```
+
+### Working with events
+
+```
+You: What's on my calendar this week?
+  [tool] calendar(action='list_events', connection='nextcloud', calendar='Personal', start='2026-02-23T00:00:00', end='2026-03-02T00:00:00')
+
+You: Schedule a meeting tomorrow at 10am
+  [tool] calendar(action='create_event', connection='nextcloud', calendar='Personal', summary='Team standup', start='2026-02-26T10:00:00', end='2026-02-26T10:30:00', reminder_minutes=15)
+
+You: Move that meeting to 2pm
+  [tool] calendar(action='update_event', connection='nextcloud', calendar='Personal', uid='...', start='2026-02-26T14:00:00', end='2026-02-26T14:30:00')
+```
+
+Events support: `summary`, `start`, `end`, `description`, `location`, `reminder_minutes`. Update and delete events by their `uid`.
+
+## Email
+
+The agent can read, search, and send emails via the `email` tool using IMAP (reading) and SMTP (sending). It works with Gmail, Outlook, and any generic IMAP/SMTP provider using app-specific passwords.
+
+### Setup
+
+Register an email account:
+
+```
+You: Add my Gmail account
+  [tool] email(action='add_account', name='gmail', email_address='alice@gmail.com', password='app-password', imap_host='imap.gmail.com', smtp_host='smtp.gmail.com')
+  [tool] done
+
+Agent: Added Gmail account.
+```
+
+For Gmail, you need an [app-specific password](https://myaccount.google.com/apppasswords) (not your regular password).
+
+### Reading emails
+
+```
+You: Show me my latest unread emails
+  [tool] email(action='read_emails', account='gmail', limit=10, unread_only=true)
+
+You: Read that email from Bob in full
+  [tool] email(action='read_email', account='gmail', uid='12345')
+```
+
+### Searching
+
+```
+You: Find emails from my boss since January
+  [tool] email(action='search_emails', account='gmail', from_='boss@company.com', date_from='2026-01-01')
+```
+
+Search criteria: `from_`, `to`, `subject`, `text`, `seen`, `date_from`, `date_to`.
+
+### Sending
+
+```
+You: Send Bob a quick email about the meeting
+  [tool] email(action='send_email', account='gmail', to='bob@company.com', subject='Meeting tomorrow', body='Hi Bob, just a reminder about our meeting at 2pm.')
+
+Agent: Email sent to bob@company.com.
+```
+
+### Management
+
+- `mark_read` — mark an email as read by UID
+- `move_email` — move an email to a different folder by UID
+- `delete_email` — delete an email by UID
+- `list_folders` — list available mailbox folders
+
+## Subagents
+
+The agent can spawn concurrent subagents that work on subtasks in parallel via the `subagent` tool. Each subagent is an independent agent with its own conversation, running in a background thread.
+
+```
+You: Research the top 3 Python web frameworks and compare them
+  [tool] subagent(action='spawn', task='Research FastAPI: features, performance, community size, pros and cons')
+  [subagent] spawned a1b2c3d4: Research FastAPI...
+  [tool] subagent(action='spawn', task='Research Django: features, performance, community size, pros and cons')
+  [subagent] spawned e5f6g7h8: Research Django...
+  [tool] subagent(action='spawn', task='Research Flask: features, performance, community size, pros and cons')
+  [subagent] spawned i9j0k1l2: Research Flask...
+```
+
+Later, the agent checks status and collects results:
+
+```
+  [tool] subagent(action='status')
+  [tool] subagent(action='result', subagent_id='a1b2c3d4')
+  [subagent] a1b2c3d4 → completed
+```
+
+### How it works
+
+- Each subagent gets its own fresh `Agent` instance with access to web search, shell, and GitHub tools
+- Subagents run independently and cannot spawn further subagents (no recursion)
+- Tasks must be self-contained — subagents have no access to the main conversation context
+- Up to 10 subagents can run concurrently (configurable via `MAX_SUBAGENTS`)
+- Each subagent has a separate tool round limit (configurable via `SUBAGENT_TOOL_ROUNDS`)
+
+### Actions
+
+- `spawn` — create a subagent with a task description
+- `status` — check progress of all or a specific subagent
+- `result` — get the output of a completed subagent
+- `cancel` — stop a running subagent
+
+## Voice Messages
+
+When running as a Telegram bot, the agent can receive and transcribe voice messages using a local [Whisper](https://huggingface.co/openai/whisper-large-v3-turbo) model.
+
+1. Send a voice message in Telegram
+2. The agent downloads the audio and transcribes it locally
+3. The transcription is passed to the agent as `[Voice message transcription]: ...`
+4. The agent responds normally
+
+Transcription dependencies (`torch`, `transformers`, `accelerate`, `imageio-ffmpeg`) are auto-installed on first use. Pre-install them to avoid the delay:
+
+```bash
+pip install -e ".[transcription]"
+```
+
+The Whisper model is configurable via `WHISPER_MODEL` (default: `openai/whisper-large-v3-turbo`).
 
 ## Automatic Context Management
 
@@ -362,25 +626,38 @@ src/
 ├── context.py         # Automatic context compression
 ├── history.py         # Conversation history persistence
 ├── llm.py             # Thin OpenAI SDK wrapper
+├── embeddings.py      # OpenAI embeddings wrapper
 ├── config.py          # .env configuration loader
-├── events.py          # Event system (LLM/Tool/Context lifecycle events)
+├── events.py          # Event system (LLM/Tool/Context/Subagent lifecycle)
 ├── formatting.py      # Event formatting for terminal display
 ├── protocol.py        # JSON-lines TCP protocol
 ├── server.py          # Daemon TCP server
 ├── client.py          # Attach client
-├── telegram.py        # Telegram bot (long polling)
+├── daemon.py          # Background daemon lifecycle (start/stop/status)
+├── telegram.py        # Telegram bot (long polling, voice messages)
+├── transcription.py   # Whisper speech-to-text (lazy load)
 ├── memory.py          # Semantic memory (SQLite + vector embeddings)
-├── embeddings.py      # OpenAI embeddings wrapper
+├── scheduler.py       # Scheduled task engine (cron, SQLite persistence)
+├── repos.py           # Repository registry (SQLite persistence)
+├── calendar_store.py  # CalDAV connection registry (SQLite persistence)
+├── email_store.py     # Email account registry (SQLite persistence)
+├── subagent.py        # Subagent manager (concurrent background threads)
 └── tools/
-    ├── base.py        # Abstract Tool base class
-    ├── registry.py    # Tool registration and dispatch
-    ├── brave_search.py # Brave Web Search (1s rate limit)
-    ├── shell.py       # Shell command execution
-    ├── codex.py       # Codex CLI integration
-    ├── github.py      # GitHub REST API integration
-    └── memory_tool.py # Memory tool (store / search / delete)
+    ├── base.py         # Abstract Tool base class
+    ├── registry.py     # Tool registration and dispatch
+    ├── brave_search.py # Brave Web Search
+    ├── shell.py        # Shell command execution
+    ├── codex.py        # Codex CLI integration
+    ├── github.py       # GitHub REST API
+    ├── memory.py       # Semantic memory (store / search / delete)
+    ├── scheduler.py    # Scheduled task management
+    ├── repos.py        # Repository registry management
+    ├── calendar.py     # CalDAV calendar and event management
+    ├── email.py        # IMAP/SMTP email management
+    └── subagent.py     # Subagent spawning and control
 
-tests/                 # Mirrors src/, 223 tests
+tests/                  # Mirrors src/, 481 tests
+SOUL.md                 # Agent personality and system prompt
 ```
 
 ## Testing
@@ -398,8 +675,9 @@ All tests are fully mocked (no real HTTP/LLM calls) and run in under 10 seconds.
 ## Requirements
 
 - Python 3.11+
-- Dependencies: `openai`, `httpx`, `python-dotenv`, `numpy`
+- Dependencies: `openai`, `httpx`, `python-dotenv`, `numpy`, `croniter`, `caldav`, `imap-tools`
 - Dev: `pytest`, `pytest-mock`, `respx`
+- Optional (voice): `torch`, `transformers`, `accelerate`, `imageio-ffmpeg`
 
 ## License
 
