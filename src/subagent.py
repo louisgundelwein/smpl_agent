@@ -187,6 +187,26 @@ class SubagentManager:
         for sid in ids:
             self.cancel(sid)
 
+    def wait_all(self, timeout: float | None = None) -> list[dict[str, Any]]:
+        """Block until all pending/running subagents complete.
+
+        Returns a list of result dicts for subagents that were waited on.
+        Thread-safe: snapshots active threads under lock, then joins
+        without holding the lock so subagent threads can update state.
+        """
+        with self._lock:
+            active = [
+                s
+                for s in self._subagents.values()
+                if s.status in (SubagentStatus.PENDING, SubagentStatus.RUNNING)
+            ]
+
+        for state in active:
+            if state.thread is not None:
+                state.thread.join(timeout=timeout)
+
+        return [s.to_dict() for s in active]
+
     def _run_subagent(self, state: SubagentState) -> None:
         """Thread target: run the subagent's agent loop."""
         state.status = SubagentStatus.RUNNING

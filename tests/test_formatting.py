@@ -176,3 +176,36 @@ def test_format_message_unknown_returns_none():
     msg = {"type": "some_unknown_type"}
     result = format_message(msg)
     assert result is None
+
+
+# --- Subagent wait/results events ---
+
+
+def test_format_subagent_wait_event():
+    from src.events import SubagentWaitEvent
+
+    event = SubagentWaitEvent(active_count=3)
+    result = format_event(event)
+    assert "[subagent] waiting for 3 subagent(s)" in result
+
+
+def test_format_subagent_results_collected_event():
+    from src.events import SubagentResultsCollectedEvent
+
+    event = SubagentResultsCollectedEvent(count=2, duration_ms=5400)
+    result = format_event(event)
+    assert "[subagent] collected 2 result(s)" in result
+    assert "5400ms" in result
+
+
+def test_format_message_subagent_wait():
+    msg = {"type": "subagent_wait", "active_count": 2}
+    result = format_message(msg)
+    assert "[subagent] waiting for 2 subagent(s)" in result
+
+
+def test_format_message_subagent_results_collected():
+    msg = {"type": "subagent_results_collected", "count": 3, "duration_ms": 1200}
+    result = format_message(msg)
+    assert "[subagent] collected 3 result(s)" in result
+    assert "1200ms" in result

@@ -221,6 +221,7 @@ def create_agent(
         history=history,
         max_tool_rounds=config.max_tool_rounds,
         emitter=emitter,
+        subagent_manager=subagent_manager,
     )
 
 
@@ -462,6 +463,7 @@ def main() -> None:
         repo_store = RepoStore(db=db)
         calendar_store = CalendarConnectionStore(db=db)
         email_store = EmailAccountStore(db=db)
+        hyperliquid_store = HyperliquidStore(db=db) if config.hyperliquid_wallet_key else None
         _load_static_tasks(scheduler_store, config.scheduler_tasks)
         agent = create_agent(
             config,
@@ -470,6 +472,7 @@ def main() -> None:
             repo_store=repo_store,
             calendar_store=calendar_store,
             email_store=email_store,
+            hyperliquid_store=hyperliquid_store,
         )
         repl(agent, db)
 

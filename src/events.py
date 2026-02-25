@@ -74,6 +74,21 @@ class SubagentStatusEvent:
     error: str | None = None
 
 
+@dataclass(frozen=True)
+class SubagentWaitEvent:
+    """Emitted when the agent begins waiting for subagents to finish."""
+
+    active_count: int
+
+
+@dataclass(frozen=True)
+class SubagentResultsCollectedEvent:
+    """Emitted when subagent results have been collected and injected."""
+
+    count: int
+    duration_ms: int
+
+
 AgentEvent = (
     ToolStartEvent
     | ToolEndEvent
@@ -83,6 +98,8 @@ AgentEvent = (
     | ContextCompressedEvent
     | SubagentSpawnedEvent
     | SubagentStatusEvent
+    | SubagentWaitEvent
+    | SubagentResultsCollectedEvent
 )
 
 EventCallback = Callable[[AgentEvent], None]
