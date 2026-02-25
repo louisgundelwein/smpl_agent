@@ -193,7 +193,7 @@ def test_default_embedding_dimensions(monkeypatch):
 
     config = Config.from_env(env_path="/dev/null")
 
-    assert config.embedding_dimensions == 1536
+    assert config.embedding_dimensions == 1024
 
 
 def test_custom_embedding_dimensions(monkeypatch):
@@ -366,25 +366,6 @@ def test_custom_github_token(monkeypatch):
 
     assert config.github_token == "ghp_test123"
 
-
-def test_default_history_path(monkeypatch):
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "BSA-test")
-    monkeypatch.delenv("HISTORY_PATH", raising=False)
-
-    config = Config.from_env(env_path="/dev/null")
-
-    assert config.history_path == "conversation_history.json"
-
-
-def test_custom_history_path(monkeypatch):
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "BSA-test")
-    monkeypatch.setenv("HISTORY_PATH", "/tmp/my_history.json")
-
-    config = Config.from_env(env_path="/dev/null")
-
-    assert config.history_path == "/tmp/my_history.json"
 
 
 def test_default_whisper_model(monkeypatch):

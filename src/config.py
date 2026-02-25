@@ -29,7 +29,6 @@ class Config:
     codex_timeout: int
     codex_max_output: int
     github_token: str | None
-    history_path: str
     whisper_model: str
     max_tool_rounds: int
     daemon_pid_path: str
@@ -62,7 +61,7 @@ class Config:
         ]
 
         embedding_model = os.getenv("EMBEDDING_MODEL", "text-embedding-3-large")
-        embedding_dimensions = int(os.getenv("EMBEDDING_DIMENSIONS", "1536"))
+        embedding_dimensions = int(os.getenv("EMBEDDING_DIMENSIONS", "1024"))
         database_url = os.getenv("DATABASE_URL", "")
         soul_path = os.getenv("SOUL_PATH", "SOUL.md")
         shell_command_timeout = int(os.getenv("SHELL_COMMAND_TIMEOUT", "30"))
@@ -72,7 +71,6 @@ class Config:
         codex_timeout = int(os.getenv("CODEX_TIMEOUT", "300"))
         codex_max_output = int(os.getenv("CODEX_MAX_OUTPUT", "50000"))
         github_token = os.getenv("GITHUB_TOKEN") or None
-        history_path = os.getenv("HISTORY_PATH", "conversation_history.json")
         whisper_model = os.getenv("WHISPER_MODEL", "openai/whisper-large-v3-turbo")
         max_tool_rounds = int(os.getenv("MAX_TOOL_ROUNDS", "25"))
         daemon_pid_path = os.getenv("DAEMON_PID_PATH", "agent.pid")
@@ -109,7 +107,6 @@ class Config:
             codex_timeout=codex_timeout,
             codex_max_output=codex_max_output,
             github_token=github_token,
-            history_path=history_path,
             whisper_model=whisper_model,
             max_tool_rounds=max_tool_rounds,
             daemon_pid_path=daemon_pid_path,

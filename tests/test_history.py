@@ -1,7 +1,7 @@
-"""Tests for src.history."""
+"""Tests for src.history (Postgres-backed ConversationHistory)."""
 
 import json
-import os
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -9,114 +9,139 @@ from src.history import ConversationHistory
 
 
 @pytest.fixture
-def history_path(tmp_path):
-    """Return a temporary file path for history."""
-    return str(tmp_path / "test_history.json")
+def cursor():
+    return MagicMock()
 
 
 @pytest.fixture
-def history(history_path):
-    """ConversationHistory pointed at a temp file."""
-    return ConversationHistory(history_path)
+def conn(cursor):
+    c = MagicMock()
+    c.cursor.return_value.__enter__ = MagicMock(return_value=cursor)
+    c.cursor.return_value.__exit__ = MagicMock(return_value=False)
+    return c
 
 
-def test_save_and_load_round_trip(history):
+@pytest.fixture
+def db(conn):
+    d = MagicMock()
+    d.get_connection.return_value = conn
+    return d
+
+
+@pytest.fixture
+def history(db):
+    return ConversationHistory(db=db, session_id="test-session")
+
+
+# ---------------------------------------------------------------------------
+# save
+# ---------------------------------------------------------------------------
+
+def test_save_executes_upsert(history, cursor, conn):
     messages = [
         {"role": "system", "content": "You are helpful."},
         {"role": "user", "content": "hi"},
-        {"role": "assistant", "content": "hello"},
     ]
     history.save(messages)
-    loaded = history.load()
 
-    assert loaded == messages
+    cursor.execute.assert_called_once()
+    call_args = cursor.execute.call_args
+    sql = call_args[0][0]
+    params = call_args[0][1]
 
-
-def test_load_nonexistent_returns_none(history):
-    assert history.load() is None
-
-
-def test_clear_deletes_file(history, history_path):
-    messages = [{"role": "system", "content": "sys"}]
-    history.save(messages)
-    assert os.path.exists(history_path)
-
-    history.clear()
-
-    assert not os.path.exists(history_path)
+    assert "INSERT INTO conversations" in sql
+    assert "ON CONFLICT" in sql
+    assert params[0] == "test-session"
+    assert json.loads(params[1]) == messages
+    conn.commit.assert_called_once()
 
 
-def test_clear_nonexistent_does_not_raise(history):
-    history.clear()  # should not raise
+def test_save_releases_connection(history, db, conn):
+    history.save([{"role": "system", "content": "sys"}])
+    db.put_connection.assert_called_once_with(conn)
 
 
-def test_save_creates_parent_dirs(tmp_path):
-    nested_path = str(tmp_path / "sub" / "dir" / "history.json")
-    history = ConversationHistory(nested_path)
-    messages = [{"role": "system", "content": "sys"}]
+# ---------------------------------------------------------------------------
+# load
+# ---------------------------------------------------------------------------
 
-    history.save(messages)
-
-    assert history.load() == messages
-
-
-def test_load_corrupt_json_returns_none(history, history_path):
-    with open(history_path, "w") as f:
-        f.write("{truncated")
-
-    assert history.load() is None
-
-
-def test_load_invalid_structure_returns_none(history, history_path):
-    with open(history_path, "w") as f:
-        json.dump({"not": "a list"}, f)
-
-    assert history.load() is None
-
-
-def test_load_empty_list_returns_none(history, history_path):
-    with open(history_path, "w") as f:
-        json.dump([], f)
-
-    assert history.load() is None
-
-
-def test_load_missing_system_role_returns_none(history, history_path):
-    with open(history_path, "w") as f:
-        json.dump([{"role": "user", "content": "hi"}], f)
-
-    assert history.load() is None
-
-
-def test_save_overwrites_existing(history):
-    messages1 = [{"role": "system", "content": "v1"}]
-    messages2 = [
-        {"role": "system", "content": "v2"},
-        {"role": "user", "content": "hi"},
-    ]
-
-    history.save(messages1)
-    history.save(messages2)
-
-    assert history.load() == messages2
-
-
-def test_compressed_messages_persist(history):
-    """Context-compressed messages (containing summary) round-trip correctly."""
+def test_load_returns_messages_when_row_exists(history, cursor):
     messages = [
         {"role": "system", "content": "sys"},
-        {
-            "role": "system",
-            "content": (
-                "[Conversation Summary]\n"
-                "- key facts here\n"
-                "[End of Summary]"
-            ),
-        },
-        {"role": "user", "content": "recent"},
-        {"role": "assistant", "content": "reply"},
+        {"role": "user", "content": "hello"},
     ]
+    # psycopg2 RealDictCursor returns JSONB as Python object
+    cursor.fetchone.return_value = {"messages": messages}
 
-    history.save(messages)
+    result = history.load()
 
-    assert history.load() == messages
+    assert result == messages
+
+
+def test_load_returns_none_when_no_row(history, cursor):
+    cursor.fetchone.return_value = None
+
+    assert history.load() is None
+
+
+def test_load_returns_none_when_empty_list(history, cursor):
+    cursor.fetchone.return_value = {"messages": []}
+
+    assert history.load() is None
+
+
+def test_load_returns_none_when_first_message_not_system(history, cursor):
+    cursor.fetchone.return_value = {
+        "messages": [{"role": "user", "content": "hi"}]
+    }
+
+    assert history.load() is None
+
+
+def test_load_releases_connection(history, db, conn, cursor):
+    cursor.fetchone.return_value = None
+    history.load()
+    db.put_connection.assert_called_once_with(conn)
+
+
+# ---------------------------------------------------------------------------
+# clear
+# ---------------------------------------------------------------------------
+
+def test_clear_executes_delete(history, cursor, conn):
+    history.clear()
+
+    cursor.execute.assert_called_once()
+    call_args = cursor.execute.call_args
+    sql = call_args[0][0]
+    params = call_args[0][1]
+
+    assert "DELETE FROM conversations" in sql
+    assert params[0] == "test-session"
+    conn.commit.assert_called_once()
+
+
+def test_clear_releases_connection(history, db, conn):
+    history.clear()
+    db.put_connection.assert_called_once_with(conn)
+
+
+# ---------------------------------------------------------------------------
+# session_id isolation
+# ---------------------------------------------------------------------------
+
+def test_different_session_ids_use_correct_id(db, cursor, conn):
+    db.get_connection.return_value = conn
+
+    h1 = ConversationHistory(db=db, session_id="session-a")
+    h1.save([{"role": "system", "content": "a"}])
+    params = cursor.execute.call_args[0][1]
+    assert params[0] == "session-a"
+
+
+def test_default_session_id_is_default(db, cursor, conn):
+    db.get_connection.return_value = conn
+    h = ConversationHistory(db=db)
+    h.save([{"role": "system", "content": "x"}])
+    params = cursor.execute.call_args[0][1]
+    assert params[0] == "default"

@@ -194,7 +194,7 @@ def create_agent(
         max_tokens=config.context_max_tokens,
         preserve_recent=config.context_preserve_recent,
     )
-    history = ConversationHistory(config.history_path)
+    history = ConversationHistory(db)
 
     system_prompt = _load_system_prompt(config.soul_path) + _build_system_context()
     if repo_store:

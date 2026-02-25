@@ -25,10 +25,12 @@ install: ## Re-install dependencies (venv must exist)
 migrate: ## Run all migrations against DATABASE_URL from .env
 	@export $$(grep -v '^#' .env | xargs) && \
 	  psql $$DATABASE_URL -f migrations/001_initial.sql && \
-	  echo "✓ Migration 001 done"
+	  echo "✓ Migration 001 done" && \
+	  psql $$DATABASE_URL -f migrations/003_fix_memories_vector_1024.sql && \
+	  echo "✓ Migration 003 done (vector 1024 + conversations)"
 
 .PHONY: migrate-fix
-migrate-fix: ## Fix memories table dimensions (run if you already ran migrate)
+migrate-fix: ## Fix memories table: vector(3072)→1536 (migration 002, legacy)
 	@export $$(grep -v '^#' .env | xargs) && \
 	  psql $$DATABASE_URL -f migrations/002_fix_memories_vector_dimensions.sql && \
 	  echo "✓ Migration 002 done"
