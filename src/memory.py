@@ -1,7 +1,6 @@
 """Semantic memory store with Postgres/pgvector persistence."""
 
 import json
-from datetime import datetime, timezone
 from typing import Any
 
 from src.db import Database
@@ -11,7 +10,7 @@ from src.embeddings import EmbeddingClient
 class MemoryStore:
     """Persistent semantic memory using Postgres + pgvector.
 
-    Stores text content with embedding vectors and optional tags.
+    Stores text content with embedding vectors and optional metadata.
     Supports hybrid search: pgvector cosine similarity + tsvector keyword bonus.
     """
 
@@ -32,20 +31,17 @@ class MemoryStore:
                         id SERIAL PRIMARY KEY,
                         content TEXT NOT NULL,
                         embedding vector({self._dimensions}) NOT NULL,
-                        tags TEXT NOT NULL DEFAULT '',
-                        created_at TEXT NOT NULL,
-                        search_vector tsvector GENERATED ALWAYS AS (
-                            to_tsvector('english', content || ' ' || tags)
-                        ) STORED
+                        metadata JSONB DEFAULT '{{}}',
+                        created_at TIMESTAMPTZ DEFAULT NOW()
                     )
                 """)
                 cur.execute("""
-                    CREATE INDEX IF NOT EXISTS memories_embedding_idx
+                    CREATE INDEX IF NOT EXISTS memories_embedding_hnsw_idx
                         ON memories USING hnsw (embedding vector_cosine_ops)
                 """)
                 cur.execute("""
-                    CREATE INDEX IF NOT EXISTS memories_search_idx
-                        ON memories USING GIN (search_vector)
+                    CREATE INDEX IF NOT EXISTS memories_content_fts_idx
+                        ON memories USING gin (to_tsvector('english', content))
                 """)
             conn.commit()
         finally:
@@ -56,22 +52,21 @@ class MemoryStore:
 
         Args:
             content: The text content to remember.
-            tags: Optional list of tags for categorization.
+            tags: Optional list of tags for categorization (stored in metadata).
 
         Returns:
             The ID of the stored memory.
         """
         vectors = self._embedding_client.embed([content])
         embedding_str = json.dumps(vectors[0])
-        tags_str = ",".join(tags) if tags else ""
-        now = datetime.now(timezone.utc).isoformat()
+        metadata = json.dumps({"tags": tags or []})
 
         conn = self._db.get_connection()
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    "INSERT INTO memories (content, embedding, tags, created_at) VALUES (%s, %s::vector, %s, %s) RETURNING id",
-                    (content, embedding_str, tags_str, now),
+                    "INSERT INTO memories (content, embedding, metadata) VALUES (%s, %s::vector, %s::jsonb) RETURNING id",
+                    (content, embedding_str, metadata),
                 )
                 row = cur.fetchone()
             conn.commit()
@@ -100,9 +95,9 @@ class MemoryStore:
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    """SELECT id, content, tags, created_at,
+                    """SELECT id, content, metadata, created_at,
                               1 - (embedding <=> %s::vector) AS semantic_score,
-                              CASE WHEN search_vector @@ plainto_tsquery('english', %s)
+                              CASE WHEN to_tsvector('english', content) @@ plainto_tsquery('english', %s)
                                    THEN 0.1 ELSE 0.0 END AS fts_bonus
                        FROM memories
                        ORDER BY semantic_score + fts_bonus DESC
@@ -114,8 +109,8 @@ class MemoryStore:
                 {
                     "id": row["id"],
                     "content": row["content"],
-                    "tags": [t for t in row["tags"].split(",") if t],
-                    "created_at": row["created_at"],
+                    "tags": (row["metadata"] or {}).get("tags", []),
+                    "created_at": str(row["created_at"]),
                     "score": round(float(row["semantic_score"]) + float(row["fts_bonus"]), 4),
                 }
                 for row in rows

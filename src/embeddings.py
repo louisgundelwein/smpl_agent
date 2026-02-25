@@ -7,7 +7,7 @@ class EmbeddingClient:
     """Thin wrapper around OpenAI Embeddings API.
 
     Mirrors LLMClient pattern: thin, no business logic, easily mockable.
-    Uses extra_body to pass task_type for DeutschlandGPT compatibility.
+    Passes task_type via extra_body for Gemini embedding models only.
     """
 
     def __init__(
@@ -31,8 +31,10 @@ class EmbeddingClient:
         Returns:
             List of embedding vectors (one per input text).
         """
-        kwargs = {"input": texts, "model": self._model, "extra_body": {"task_type": "SEMANTIC_SIMILARITY"}}
+        kwargs = {"input": texts, "model": self._model}
         if self._dimensions is not None:
             kwargs["dimensions"] = self._dimensions
+        if "gemini" in self._model.lower():
+            kwargs["extra_body"] = {"task_type": "SEMANTIC_SIMILARITY"}
         response = self._client.embeddings.create(**kwargs)
         return [item.embedding for item in response.data]

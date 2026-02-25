@@ -27,7 +27,22 @@ migrate: ## Run all migrations against DATABASE_URL from .env
 	  psql $$DATABASE_URL -f migrations/001_initial.sql && \
 	  echo "✓ Migration 001 done" && \
 	  psql $$DATABASE_URL -f migrations/003_fix_memories_vector_1024.sql && \
-	  echo "✓ Migration 003 done (vector 1024 + conversations)"
+	  echo "✓ Migration 003 done (vector 1024)"
+
+.PHONY: migrate-1024
+migrate-1024: ## Fix memories vector→1024 (migration 003)
+	@export $$(grep -v '^#' .env | xargs) && \
+	  psql $$DATABASE_URL -f migrations/003_fix_memories_vector_1024.sql && \
+	  echo "✓ Migration 003 done (vector 1024)"
+
+.PHONY: reset-db
+reset-db: ## Drop ALL tables and recreate from scratch (DESTRUCTIVE)
+	@echo "WARNING: This will DESTROY all data in the database."
+	@read -p "Type 'yes' to confirm: " confirm && [ "$$confirm" = "yes" ] || (echo "Aborted." && exit 1)
+	@export $$(grep -v '^#' .env | xargs) && \
+	  psql $$DATABASE_URL -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" && \
+	  psql $$DATABASE_URL -f migrations/001_initial.sql && \
+	  echo "Done. Database reset complete."
 
 .PHONY: migrate-fix
 migrate-fix: ## Fix memories table: vector(3072)→1536 (migration 002, legacy)
@@ -56,6 +71,11 @@ stop: ## Stop background daemon
 .PHONY: status
 status: ## Show daemon status
 	$(PYTHON) -m src.main status
+
+.PHONY: logs
+logs: ## Tail daemon logs (live)
+	@LOG=$$(grep -s '^DAEMON_LOG_PATH=' .env | cut -d= -f2); \
+	  tail -f $${LOG:-agent.log}
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
 

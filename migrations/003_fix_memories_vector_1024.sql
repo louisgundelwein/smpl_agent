@@ -1,4 +1,4 @@
--- Migration 003: Fix memories vector dimensions (1536 → 1024) + add conversations table
+-- Migration 003: Fix memories vector dimensions (1536 → 1024)
 --
 -- Run this if you already ran migration 001 or 002.
 -- Supported dimensions for the configured embedding model: 256, 1024, 3072.
@@ -36,10 +36,3 @@ BEGIN
   END IF;
 END
 $$;
-
--- Add conversations table (for persistent conversation history)
-CREATE TABLE IF NOT EXISTS conversations (
-  session_id  TEXT PRIMARY KEY,
-  messages    JSONB NOT NULL DEFAULT '[]',
-  updated_at  TEXT NOT NULL DEFAULT ''
-);

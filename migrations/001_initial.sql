@@ -13,27 +13,23 @@ CREATE EXTENSION IF NOT EXISTS vector;
 -- ---------------------------------------------------------------------------
 -- memories
 -- Semantic memory store (pgvector + full-text search)
--- Default embedding dimensions: 1536 (fits pgvector HNSW limit of 2000).
--- Matches text-embedding-3-large with dimensions=1536 or text-embedding-3-small.
+-- Default embedding dimensions: 1024 (fits pgvector HNSW limit of 2000).
 -- Override EMBEDDING_DIMENSIONS in .env if using a different model (must be ≤2000 for HNSW).
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS memories (
     id          SERIAL PRIMARY KEY,
     content     TEXT    NOT NULL,
-    embedding   vector(1536) NOT NULL,
-    tags        TEXT    NOT NULL DEFAULT '',
-    created_at  TEXT    NOT NULL,
-    search_vector tsvector GENERATED ALWAYS AS (
-        to_tsvector('english', content || ' ' || tags)
-    ) STORED
+    embedding   vector(1024) NOT NULL,
+    metadata    JSONB   DEFAULT '{}',
+    created_at  TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS memories_embedding_idx
+CREATE INDEX IF NOT EXISTS memories_embedding_hnsw_idx
     ON memories USING hnsw (embedding vector_cosine_ops);
 
-CREATE INDEX IF NOT EXISTS memories_search_idx
-    ON memories USING GIN (search_vector);
+CREATE INDEX IF NOT EXISTS memories_content_fts_idx
+    ON memories USING gin (to_tsvector('english', content));
 
 -- ---------------------------------------------------------------------------
 -- schedules
@@ -101,4 +97,74 @@ CREATE TABLE IF NOT EXISTS repos (
     description     TEXT    NOT NULL DEFAULT '',
     tags            TEXT    NOT NULL DEFAULT '',
     added_at        TEXT    NOT NULL
+);
+
+-- ---------------------------------------------------------------------------
+-- conversations + messages
+-- Conversation history (normalized: one row per message)
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS conversations (
+    id          TEXT PRIMARY KEY,
+    created_at  TIMESTAMPTZ DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS messages (
+    id              SERIAL PRIMARY KEY,
+    conversation_id TEXT    NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    role            TEXT    NOT NULL,
+    content         TEXT,
+    tool_calls      JSONB,
+    tool_call_id    TEXT,
+    name            TEXT,
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS messages_conversation_id_idx
+    ON messages(conversation_id);
+
+-- ---------------------------------------------------------------------------
+-- hl_trades
+-- Hyperliquid trade log (append-only)
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS hl_trades (
+    id          SERIAL PRIMARY KEY,
+    trade_id    TEXT,
+    coin        TEXT    NOT NULL,
+    action      TEXT    NOT NULL,
+    side        TEXT,
+    size        NUMERIC,
+    price       NUMERIC,
+    order_type  TEXT,
+    pnl         NUMERIC,
+    metadata    JSONB,
+    created_at  TEXT    NOT NULL
+);
+
+-- ---------------------------------------------------------------------------
+-- hl_position_snapshots
+-- Hyperliquid periodic position state captures
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS hl_position_snapshots (
+    id              SERIAL PRIMARY KEY,
+    snapshot        JSONB   NOT NULL,
+    total_pnl       NUMERIC,
+    account_value   NUMERIC,
+    margin_used     NUMERIC,
+    created_at      TEXT    NOT NULL
+);
+
+-- ---------------------------------------------------------------------------
+-- hl_strategy_state
+-- Hyperliquid key-value store for strategy parameters
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS hl_strategy_state (
+    id          SERIAL PRIMARY KEY,
+    name        TEXT    NOT NULL UNIQUE,
+    state       JSONB   NOT NULL,
+    updated_at  TEXT    NOT NULL
 );
