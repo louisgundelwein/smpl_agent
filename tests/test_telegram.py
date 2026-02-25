@@ -551,7 +551,7 @@ def test_send_message_logs_error(capsys):
         })
     )
 
-    bot._send_message(42, "test")
+    bot.send_message(42, "test")
 
     captured = capsys.readouterr()
     assert "sendMessage failed" in captured.out

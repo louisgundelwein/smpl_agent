@@ -129,6 +129,7 @@ def start_daemon(pid_path: str, log_path: str, host: str = "127.0.0.1", port: in
         env=env,
         **kwargs,
     )
+    log_file.close()
 
     write_pid(pid_path, proc.pid)
     return proc.pid

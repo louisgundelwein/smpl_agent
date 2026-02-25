@@ -215,7 +215,8 @@ class SchedulerStore:
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT cron_expression FROM schedules WHERE id = %s", (task_id,)
+                    "SELECT cron_expression FROM schedules WHERE id = %s FOR UPDATE",
+                    (task_id,),
                 )
                 row = cur.fetchone()
                 if not row:
@@ -290,6 +291,7 @@ class Scheduler:
         self._store = store
         self._telegram_send = telegram_send
         self._poll_interval = poll_interval
+        self._stop_event = threading.Event()
 
     def poll_loop(self, agent: Any, agent_lock: threading.Lock) -> None:
         """Daemon thread loop. Checks for due tasks every poll_interval seconds.
@@ -298,17 +300,27 @@ class Scheduler:
         """
         logger.info("Scheduler started (poll every %ds)", self._poll_interval)
 
-        while True:
+        while not self._stop_event.is_set():
             try:
-                time.sleep(self._poll_interval)
+                self._stop_event.wait(self._poll_interval)
+                if self._stop_event.is_set():
+                    break
                 due_tasks = self._store.get_due()
 
                 for task in due_tasks:
+                    if self._stop_event.is_set():
+                        break
                     self._run_task(task, agent, agent_lock)
 
             except Exception:
                 logger.exception("Scheduler error")
-                time.sleep(self._poll_interval)
+                self._stop_event.wait(self._poll_interval)
+
+        logger.info("Scheduler stopped.")
+
+    def stop(self) -> None:
+        """Signal the poll_loop to stop gracefully."""
+        self._stop_event.set()
 
     def _run_task(
         self, task: dict, agent: Any, agent_lock: threading.Lock
@@ -319,7 +331,9 @@ class Scheduler:
 
         logger.info("[scheduler] running task: %s", task_name)
 
-        agent_lock.acquire()
+        if not agent_lock.acquire(timeout=300):
+            logger.warning("[scheduler] task '%s' skipped: agent busy", task_name)
+            return
         try:
             result = agent.run(
                 f"[Scheduled task '{task_name}']: {prompt}\n\n"

@@ -67,8 +67,8 @@ class AgentClient:
         self._socket.connect((self._host, self._port))
         self._running = True
 
-        recv_thread = threading.Thread(target=self._recv_loop, daemon=True)
-        recv_thread.start()
+        self._recv_thread = threading.Thread(target=self._recv_loop, daemon=True)
+        self._recv_thread.start()
 
         print(f"Connected to agent at {self._host}:{self._port}")
         print("Type 'quit' to detach, 'reset' to clear history.\n")
@@ -91,8 +91,9 @@ class AgentClient:
                 self._socket.sendall(encode({"type": "run", "content": user_input}))
         finally:
             self._running = False
-            print("Detached.")
             try:
                 self._socket.close()
             except OSError:
                 pass
+            self._recv_thread.join(timeout=2.0)
+            print("Detached.")

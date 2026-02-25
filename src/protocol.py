@@ -22,6 +22,8 @@ def decode(line: bytes) -> dict[str, Any]:
     obj = json.loads(text)
     if not isinstance(obj, dict):
         raise ValueError(f"Expected JSON object, got {type(obj).__name__}")
+    if "type" not in obj:
+        raise ValueError("Message missing required 'type' field")
     return obj
 
 

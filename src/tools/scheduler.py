@@ -109,6 +109,13 @@ class SchedulerTool(Tool):
                 "error": "name, prompt, and schedule are required for 'create' action"
             })
 
+        # Validate cron expression before storing
+        from src.scheduler import compute_next_run
+        try:
+            compute_next_run(schedule)
+        except Exception as exc:
+            return json.dumps({"error": f"Invalid schedule expression: {exc}"})
+
         deliver_to = kwargs.get("deliver_to", "memory")
         telegram_chat_id = kwargs.get("telegram_chat_id")
 

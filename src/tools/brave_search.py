@@ -1,6 +1,7 @@
 """Brave Web Search API tool."""
 
 import json
+import threading
 import time
 from typing import Any
 
@@ -21,6 +22,7 @@ class BraveSearchTool(Tool):
     def __init__(self, api_key: str) -> None:
         self._api_key = api_key
         self._last_request_time: float = 0.0
+        self._rate_lock = threading.Lock()
 
     @property
     def name(self) -> str:
@@ -56,10 +58,12 @@ class BraveSearchTool(Tool):
         }
 
     def _enforce_cooldown(self) -> None:
-        """Sleep if needed to respect the rate limit."""
-        elapsed = time.monotonic() - self._last_request_time
-        if elapsed < self.COOLDOWN_SECONDS:
-            time.sleep(self.COOLDOWN_SECONDS - elapsed)
+        """Sleep if needed to respect the rate limit (thread-safe)."""
+        with self._rate_lock:
+            elapsed = time.monotonic() - self._last_request_time
+            if elapsed < self.COOLDOWN_SECONDS:
+                time.sleep(self.COOLDOWN_SECONDS - elapsed)
+            self._last_request_time = time.monotonic()
 
     def execute(self, **kwargs: Any) -> str:
         """Execute a Brave web search.
@@ -83,7 +87,6 @@ class BraveSearchTool(Tool):
             },
             timeout=10.0,
         )
-        self._last_request_time = time.monotonic()
 
         response.raise_for_status()
         data = response.json()

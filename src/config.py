@@ -62,9 +62,16 @@ class Config:
         telegram_token = os.getenv("TELEGRAM_BOT_TOKEN") or None
 
         raw_ids = os.getenv("TELEGRAM_ALLOWED_CHAT_IDS", "")
-        telegram_chat_ids = [
-            int(x.strip()) for x in raw_ids.split(",") if x.strip()
-        ]
+        telegram_chat_ids = []
+        for x in raw_ids.split(","):
+            x = x.strip()
+            if x:
+                try:
+                    telegram_chat_ids.append(int(x))
+                except ValueError:
+                    raise ValueError(
+                        f"Invalid TELEGRAM_ALLOWED_CHAT_IDS entry: '{x}' (must be integer)"
+                    )
 
         embedding_model = os.getenv("EMBEDDING_MODEL", "text-embedding-3-large")
         embedding_dimensions = int(os.getenv("EMBEDDING_DIMENSIONS", "1024"))

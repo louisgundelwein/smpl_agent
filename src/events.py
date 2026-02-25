@@ -125,4 +125,7 @@ class EventEmitter:
     def emit(self, event: AgentEvent) -> None:
         """Dispatch event to all registered listeners."""
         for listener in self._listeners:
-            listener(event)
+            try:
+                listener(event)
+            except Exception:
+                pass

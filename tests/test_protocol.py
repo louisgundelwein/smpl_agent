@@ -52,8 +52,13 @@ def test_line_buffer_multiple():
 
 def test_line_buffer_split_across_feeds():
     buf = LineBuffer()
-    assert buf.feed(b'{"key":') == []
-    assert buf.feed(b'"val') == []
-    lines = buf.feed(b'ue"}\n')
+    assert buf.feed(b'{"type":') == []
+    assert buf.feed(b'"pi') == []
+    lines = buf.feed(b'ng"}\n')
     assert len(lines) == 1
-    assert decode(lines[0]) == {"key": "value"}
+    assert decode(lines[0]) == {"type": "ping"}
+
+
+def test_decode_missing_type_raises():
+    with pytest.raises(ValueError, match="missing required 'type' field"):
+        decode(b'{"key": "value"}')

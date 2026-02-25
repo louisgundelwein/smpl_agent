@@ -204,6 +204,10 @@ class SubagentManager:
         for state in active:
             if state.thread is not None:
                 state.thread.join(timeout=timeout)
+                if state.thread.is_alive():
+                    state.status = SubagentStatus.FAILED
+                    state.error = "Timed out waiting for completion"
+                    state.completed_at = time.monotonic()
 
         return [s.to_dict() for s in active]
 

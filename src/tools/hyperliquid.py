@@ -1,6 +1,7 @@
 """Hyperliquid perpetual futures trading tool."""
 
 import json
+import threading
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -24,18 +25,20 @@ class _RateLimiter:
         self._max_weight = max_weight
         self._window = window_seconds
         self._calls: list[tuple[float, int]] = []
+        self._lock = threading.Lock()
 
     def wait_if_needed(self, weight: int) -> None:
-        now = time.monotonic()
-        self._calls = [(t, w) for t, w in self._calls if now - t < self._window]
-        total = sum(w for _, w in self._calls)
-        if total + weight > self._max_weight:
-            if self._calls:
-                oldest = self._calls[0][0]
-                sleep_time = self._window - (now - oldest)
-                if sleep_time > 0:
-                    time.sleep(sleep_time)
-        self._calls.append((time.monotonic(), weight))
+        with self._lock:
+            now = time.monotonic()
+            self._calls = [(t, w) for t, w in self._calls if now - t < self._window]
+            total = sum(w for _, w in self._calls)
+            if total + weight > self._max_weight:
+                if self._calls:
+                    oldest = self._calls[0][0]
+                    sleep_time = self._window - (now - oldest)
+                    if sleep_time > 0:
+                        time.sleep(sleep_time)
+            self._calls.append((time.monotonic(), weight))
 
 
 class HyperliquidTool(Tool):
@@ -242,15 +245,29 @@ class HyperliquidTool(Tool):
                 f"${self._max_position_size_usd:.0f}"
             )
 
-        # Daily loss check
+        # Daily loss check (realized + unrealized)
         today_start = datetime.now(timezone.utc).replace(
             hour=0, minute=0, second=0, microsecond=0,
         )
         today_trades = self._store.get_trades(after=today_start)
-        daily_pnl = sum(t.get("pnl", 0) or 0 for t in today_trades)
+        realized_pnl = sum(t.get("pnl", 0) or 0 for t in today_trades)
+
+        # Include unrealized PnL from open positions
+        unrealized_pnl = 0.0
+        try:
+            self._rate_limiter.wait_if_needed(20)
+            state = self._info.user_state(self._address)
+            for pos in state.get("assetPositions", []):
+                entry = pos.get("position", {})
+                unrealized_pnl += float(entry.get("unrealizedPnl", 0))
+        except Exception:
+            pass  # Conservative: skip if we can't fetch, rely on realized only
+
+        daily_pnl = realized_pnl + unrealized_pnl
         if daily_pnl < -self._max_loss_usd:
             return (
-                f"Daily loss ${abs(daily_pnl):.0f} exceeds limit "
+                f"Daily loss ${abs(daily_pnl):.0f} (realized: ${abs(realized_pnl):.0f}, "
+                f"unrealized: ${abs(unrealized_pnl):.0f}) exceeds limit "
                 f"${self._max_loss_usd:.0f}. Trading halted."
             )
 

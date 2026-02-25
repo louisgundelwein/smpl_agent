@@ -6,6 +6,7 @@ import smtplib
 from datetime import date, datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from html.parser import HTMLParser
 from typing import Any
 
 from imap_tools import AND, MailBox, MailMessage
@@ -19,11 +20,42 @@ _PREVIEW_LENGTH = 500
 _FULL_BODY_LENGTH = 50_000
 
 
+class _HTMLTextExtractor(HTMLParser):
+    """Extract visible text from HTML, skipping script/style content."""
+
+    _SKIP_TAGS = frozenset({"script", "style", "head"})
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._parts: list[str] = []
+        self._skip_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.lower() in self._SKIP_TAGS:
+            self._skip_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() in self._SKIP_TAGS and self._skip_depth > 0:
+            self._skip_depth -= 1
+
+    def handle_data(self, data: str) -> None:
+        if self._skip_depth == 0:
+            self._parts.append(data)
+
+    def get_text(self) -> str:
+        return re.sub(r"\s+", " ", " ".join(self._parts)).strip()
+
+
 def _strip_html(html: str) -> str:
-    """Rough HTML-to-text: strip tags and collapse whitespace."""
-    text = re.sub(r"<[^>]+>", " ", html)
-    text = re.sub(r"\s+", " ", text)
-    return text.strip()
+    """Convert HTML to plain text, stripping tags and script/style content."""
+    parser = _HTMLTextExtractor()
+    try:
+        parser.feed(html)
+        return parser.get_text()
+    except Exception:
+        # Fallback for severely malformed HTML
+        text = re.sub(r"<[^>]+>", " ", html)
+        return re.sub(r"\s+", " ", text).strip()
 
 
 def _body_text(msg: MailMessage, max_len: int = _PREVIEW_LENGTH) -> str:

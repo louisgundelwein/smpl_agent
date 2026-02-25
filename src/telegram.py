@@ -32,6 +32,7 @@ class TelegramBot:
         self._offset = 0
         self._bot_name: str | None = None
         self._transcriber = transcriber
+        self._stop_event = threading.Event()
 
     def verify(self) -> str:
         """Call getMe to verify the token works. Returns the bot username.
@@ -53,7 +54,7 @@ class TelegramBot:
     # Telegram rejects messages longer than this.
     _MAX_MESSAGE_LENGTH = 4096
 
-    def _send_message(
+    def send_message(
         self, chat_id: int, text: str, reply_to_message_id: int | None = None,
     ) -> None:
         """Send a text message to a Telegram chat.
@@ -168,7 +169,7 @@ class TelegramBot:
     ) -> None:
         """Handle a voice message: download, transcribe, pass to agent."""
         if not self._transcriber:
-            self._send_message(chat_id, "Voice messages are not supported (transcription not configured).")
+            self.send_message(chat_id, "Voice messages are not supported (transcription not configured).")
             return
 
         voice = message["voice"]
@@ -181,18 +182,18 @@ class TelegramBot:
             audio_bytes = self._download_file(file_id)
         except Exception as exc:
             print(f"  [telegram] failed to download voice: {exc}")
-            self._send_message(chat_id, "Failed to download voice message.")
+            self.send_message(chat_id, "Failed to download voice message.")
             return
 
         try:
             text = self._transcriber.transcribe(audio_bytes)
         except Exception as exc:
             print(f"  [telegram] transcription error: {exc}")
-            self._send_message(chat_id, f"Transcription failed: {exc}")
+            self.send_message(chat_id, f"Transcription failed: {exc}")
             return
 
         if not text.strip():
-            self._send_message(chat_id, "Could not transcribe any speech from the voice message.")
+            self.send_message(chat_id, "Could not transcribe any speech from the voice message.")
             return
 
         print(f"  [telegram] transcribed: {text[:80]}")
@@ -206,7 +207,9 @@ class TelegramBot:
 
         msg_id = message.get("message_id")
 
-        agent_lock.acquire()
+        if not agent_lock.acquire(timeout=300):
+            self.send_message(chat_id, "Agent is busy, please try again later.", reply_to_message_id=msg_id)
+            return
         try:
             response = agent.run(prefixed_text)
         except Exception as exc:
@@ -215,7 +218,7 @@ class TelegramBot:
         finally:
             agent_lock.release()
 
-        self._send_message(chat_id, response, reply_to_message_id=msg_id)
+        self.send_message(chat_id, response, reply_to_message_id=msg_id)
         print(f"  [telegram] replied to chat {chat_id}")
 
     def poll_loop(self, agent: Any, agent_lock: threading.Lock) -> None:
@@ -228,7 +231,7 @@ class TelegramBot:
         logger.info("Telegram polling started.")
         consecutive_errors = 0
 
-        while True:
+        while not self._stop_event.is_set():
             try:
                 data = self._api(
                     "getUpdates",
@@ -268,7 +271,9 @@ class TelegramBot:
 
                     msg_id = message.get("message_id")
 
-                    agent_lock.acquire()
+                    if not agent_lock.acquire(timeout=300):
+                        self.send_message(chat_id, "Agent is busy, please try again later.", reply_to_message_id=msg_id)
+                        continue
                     try:
                         response = agent.run(text)
                     except Exception as exc:
@@ -277,11 +282,17 @@ class TelegramBot:
                     finally:
                         agent_lock.release()
 
-                    self._send_message(chat_id, response, reply_to_message_id=msg_id)
+                    self.send_message(chat_id, response, reply_to_message_id=msg_id)
                     print(f"  [telegram] replied to chat {chat_id}")
 
             except Exception as exc:
                 consecutive_errors += 1
                 print(f"  [telegram] poll error: {exc}")
                 logger.error("Telegram poll error: %s", exc)
-                time.sleep(min(5 * consecutive_errors, 60))
+                self._stop_event.wait(min(5 * consecutive_errors, 60))
+
+        logger.info("Telegram polling stopped.")
+
+    def stop(self) -> None:
+        """Signal the poll_loop to stop gracefully."""
+        self._stop_event.set()

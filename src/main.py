@@ -332,7 +332,7 @@ def serve(config: Config) -> None:
         try:
             bot_name = telegram_bot.verify()
             print(f"Telegram bot verified: @{bot_name}")
-            telegram_send = telegram_bot._send_message
+            telegram_send = telegram_bot.send_message
         except Exception as exc:
             print(f"Telegram bot token invalid: {exc}", file=sys.stderr)
             db.close()

@@ -41,7 +41,7 @@ def test_execute_get_success(tool):
     result = json.loads(tool.execute(method="GET", endpoint="/user"))
 
     assert result["status_code"] == 200
-    body = json.loads(result["body"])
+    body = result["body"]
     assert body["login"] == "testuser"
 
 
@@ -62,7 +62,7 @@ def test_execute_post_success(tool):
     )
 
     assert result["status_code"] == 201
-    body = json.loads(result["body"])
+    body = result["body"]
     assert body["number"] == 42
 
 

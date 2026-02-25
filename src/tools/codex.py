@@ -90,10 +90,16 @@ class CodexTool(Tool):
             # Codex CLI uses its own auth (device login) and must always
             # talk to OpenAI directly.  Strip OPENAI_BASE_URL / OPENAI_API_KEY
             # so the agent's custom LLM config doesn't leak into Codex.
+            _STRIP_KEYS = {
+                "OPENAI_BASE_URL", "OPENAI_API_KEY",
+                "GITHUB_TOKEN", "BRAVE_SEARCH_API_KEY",
+                "TELEGRAM_BOT_TOKEN", "DATABASE_URL",
+                "HYPERLIQUID_WALLET_KEY", "HYPERLIQUID_WALLET_ADDRESS",
+            }
             env = {
                 k: v
                 for k, v in os.environ.items()
-                if k not in ("OPENAI_BASE_URL", "OPENAI_API_KEY")
+                if k not in _STRIP_KEYS
             }
 
             result = subprocess.run(

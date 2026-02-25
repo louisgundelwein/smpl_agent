@@ -272,21 +272,24 @@ class AgentServer:
                 except socket.timeout:
                     continue
 
+                reject = False
                 with self._client_lock:
                     if self._client_socket is not None:
-                        try:
-                            client_socket.sendall(
-                                encode(
-                                    {
-                                        "type": "busy",
-                                        "content": "Another client is connected.",
-                                    }
-                                )
+                        reject = True
+                if reject:
+                    try:
+                        client_socket.sendall(
+                            encode(
+                                {
+                                    "type": "busy",
+                                    "content": "Another client is connected.",
+                                }
                             )
-                            client_socket.close()
-                        except OSError:
-                            pass
-                        continue
+                        )
+                        client_socket.close()
+                    except OSError:
+                        pass
+                    continue
 
                 thread = threading.Thread(
                     target=self._handle_client,

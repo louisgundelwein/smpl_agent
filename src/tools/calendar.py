@@ -223,6 +223,8 @@ class CalendarTool(Tool):
     @staticmethod
     def _parse_dt(value: str) -> datetime:
         """Parse an ISO 8601 datetime string."""
+        if value.endswith("Z"):
+            value = value[:-1] + "+00:00"
         return datetime.fromisoformat(value)
 
     @staticmethod

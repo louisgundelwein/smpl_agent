@@ -31,6 +31,8 @@ class EmbeddingClient:
         Returns:
             List of embedding vectors (one per input text).
         """
+        if not texts:
+            return []
         kwargs = {"input": texts, "model": self._model}
         if self._dimensions is not None:
             kwargs["dimensions"] = self._dimensions

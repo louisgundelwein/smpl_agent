@@ -136,12 +136,14 @@ class GitHubTool(Tool):
                     "body": None,
                 })
 
-            result_text = json.dumps(
-                response.json(), ensure_ascii=False,
-            )
+            data = response.json()
+            result_text = json.dumps(data, ensure_ascii=False)
+            truncated = self._truncate(result_text)
+            # Avoid double-encoding: use parsed dict when not truncated
+            body = data if truncated == result_text else truncated
             return json.dumps({
                 "status_code": response.status_code,
-                "body": self._truncate(result_text),
+                "body": body,
             }, ensure_ascii=False)
 
         except httpx.HTTPStatusError as exc:

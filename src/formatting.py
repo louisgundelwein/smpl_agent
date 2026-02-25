@@ -32,6 +32,8 @@ def format_event(event: AgentEvent) -> str | None:
         return f"  [llm] done ({action}, {event.duration_ms}ms)"
     elif isinstance(event, ToolStartEvent):
         args_display = ", ".join(f"{k}={v!r}" for k, v in event.arguments.items())
+        if len(args_display) > 200:
+            args_display = args_display[:200] + "..."
         return f"  [tool] {event.tool_name}({args_display})"
     elif isinstance(event, ToolEndEvent):
         return f"  [tool] done ({event.duration_ms}ms)"
@@ -76,6 +78,8 @@ def format_message(msg: dict[str, Any]) -> str | None:
     elif msg_type == "tool_start":
         args = msg.get("arguments", {})
         args_display = ", ".join(f"{k}={v!r}" for k, v in args.items())
+        if len(args_display) > 200:
+            args_display = args_display[:200] + "..."
         return f"  [tool] {msg.get('tool_name', '')}({args_display})"
     elif msg_type == "tool_end":
         return f"  [tool] done ({msg.get('duration_ms', '?')}ms)"

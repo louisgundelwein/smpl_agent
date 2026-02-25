@@ -128,7 +128,10 @@ class ContextManager:
                 {"role": "user", "content": formatted},
             ]
         )
-        return response.choices[0].message.content
+        summary = response.choices[0].message.content
+        if not summary:
+            raise ValueError("LLM returned empty summary")
+        return summary
 
     def _format_for_summary(self, messages: list[dict[str, Any]]) -> str:
         """Convert messages to readable text for the summarizer."""
