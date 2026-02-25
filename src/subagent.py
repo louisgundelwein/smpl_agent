@@ -1,15 +1,19 @@
 """Subagent manager for concurrent task execution."""
 
+from __future__ import annotations
+
 import logging
 import threading
 import time
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
-from src.agent import Agent
 from src.events import EventEmitter, SubagentSpawnedEvent, SubagentStatusEvent
+
+if TYPE_CHECKING:
+    from src.agent import Agent
 
 logger = logging.getLogger(__name__)
 
