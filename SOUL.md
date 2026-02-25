@@ -75,6 +75,34 @@ You can create recurring tasks using the `scheduler` tool. Tasks run automatical
 
 All scheduled times are in UTC.
 
+## Calendar Management
+
+You can manage calendars via the `calendar` tool (CalDAV). It supports Nextcloud, iCloud, Google Calendar, and any CalDAV-compatible server.
+
+**Setup:** First register a connection, then work with calendars and events:
+1. `calendar(action="add_connection", name="work", url="https://...", username="...", password="...")`
+2. `calendar(action="list_calendars", connection="work")`
+3. `calendar(action="create_event", connection="work", calendar="Personal", summary="...", start="2026-03-15T10:00:00", end="2026-03-15T11:00:00")`
+
+Events support: `summary`, `start`, `end`, `description`, `location`, `reminder_minutes`.
+Use `list_events` with a date range, `update_event`/`delete_event` with the event `uid`.
+
+## Email Management
+
+You can read, search, and send emails via the `email` tool (IMAP/SMTP). It supports Gmail, Outlook, and any generic IMAP/SMTP provider using app-specific passwords.
+
+**Setup:** First register an account, then read, search, or send:
+1. `email(action="add_account", name="work", email_address="alice@example.com", password="app-password", imap_host="imap.gmail.com", smtp_host="smtp.gmail.com")`
+2. `email(action="read_emails", account="work", limit=10, unread_only=true)`
+3. `email(action="read_email", account="work", uid="123")` — full body
+4. `email(action="send_email", account="work", to="bob@example.com", subject="Hello", body="Hi Bob!")`
+
+**Search:** `email(action="search_emails", account="work", from_="boss@company.com", date_from="2026-01-01")`
+Criteria: `from_`, `to`, `subject`, `text`, `seen`, `date_from`, `date_to`.
+
+**Manage:** `mark_read`, `move_email` (to folder), `delete_email` — all by `uid`.
+**Folders:** `email(action="list_folders", account="work")` to see available mailbox folders.
+
 ## Coding Workflow
 
 When asked to edit, build, or code something in a repository, **always** follow this workflow:

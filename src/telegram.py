@@ -50,25 +50,80 @@ class TelegramBot:
         resp.raise_for_status()
         return resp.json()
 
+    # Telegram rejects messages longer than this.
+    _MAX_MESSAGE_LENGTH = 4096
+
     def _send_message(
         self, chat_id: int, text: str, reply_to_message_id: int | None = None,
     ) -> None:
         """Send a text message to a Telegram chat.
 
+        Automatically splits messages that exceed Telegram's 4096-character
+        limit.  Only the first chunk is sent as a reply; subsequent chunks
+        are plain follow-up messages.
+
         Args:
             chat_id: Target chat.
             text: Message body.
-            reply_to_message_id: If set, the message is sent as a reply to
-                this message ID (Telegram displays the quoted original).
+            reply_to_message_id: If set, the first chunk is sent as a reply
+                to this message ID.
         """
-        payload: dict[str, Any] = {"chat_id": chat_id, "text": text}
-        if reply_to_message_id is not None:
-            payload["reply_parameters"] = {"message_id": reply_to_message_id}
-        httpx.post(
-            f"{self._base_url}/sendMessage",
-            json=payload,
-            timeout=30.0,
-        )
+        if not text or not text.strip():
+            text = "(empty response)"
+
+        chunks = self._split_message(text)
+        for i, chunk in enumerate(chunks):
+            payload: dict[str, Any] = {"chat_id": chat_id, "text": chunk}
+            # Only the first chunk is a reply to the original message.
+            if i == 0 and reply_to_message_id is not None:
+                payload["reply_parameters"] = {"message_id": reply_to_message_id}
+            try:
+                resp = httpx.post(
+                    f"{self._base_url}/sendMessage",
+                    json=payload,
+                    timeout=30.0,
+                )
+                if not resp.is_success:
+                    logger.error(
+                        "sendMessage failed (HTTP %s): %s",
+                        resp.status_code,
+                        resp.text[:500],
+                    )
+                    print(f"  [telegram] sendMessage failed (HTTP {resp.status_code}): {resp.text[:200]}")
+            except Exception as exc:
+                logger.error("sendMessage exception: %s", exc)
+                print(f"  [telegram] sendMessage exception: {exc}")
+
+    @classmethod
+    def _split_message(cls, text: str) -> list[str]:
+        """Split text into chunks that fit Telegram's message size limit.
+
+        Tries to split on newlines first, then on spaces, and only as a
+        last resort splits mid-word.
+        """
+        limit = cls._MAX_MESSAGE_LENGTH
+        if len(text) <= limit:
+            return [text]
+
+        chunks: list[str] = []
+        while text:
+            if len(text) <= limit:
+                chunks.append(text)
+                break
+
+            # Try to find a newline to split on.
+            split_at = text.rfind("\n", 0, limit)
+            if split_at == -1:
+                # Fall back to space.
+                split_at = text.rfind(" ", 0, limit)
+            if split_at == -1:
+                # Hard split.
+                split_at = limit
+
+            chunks.append(text[:split_at])
+            text = text[split_at:].lstrip("\n")
+
+        return chunks
 
     def _send_typing(self, chat_id: int) -> None:
         """Send 'typing...' action indicator."""

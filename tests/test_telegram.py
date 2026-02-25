@@ -443,3 +443,116 @@ def test_extract_reply_context_empty_text():
         "reply_to_message": {"message_id": 1},
     }
     assert bot._extract_reply_context(msg) is None
+
+
+# --- Message splitting tests ---
+
+
+def test_split_message_short():
+    """Short messages are returned as a single chunk."""
+    chunks = TelegramBot._split_message("Hello!")
+    assert chunks == ["Hello!"]
+
+
+def test_split_message_at_limit():
+    """Message exactly at the limit is a single chunk."""
+    text = "a" * 4096
+    chunks = TelegramBot._split_message(text)
+    assert chunks == [text]
+
+
+def test_split_message_long_splits_on_newline():
+    """Long messages are split on newlines when possible."""
+    line = "x" * 2000
+    text = f"{line}\n{line}\n{line}"  # ~6002 chars
+    chunks = TelegramBot._split_message(text)
+    assert len(chunks) == 2
+    assert all(len(c) <= 4096 for c in chunks)
+    # First chunk should split at the second newline (pos 4001).
+    assert chunks[0] == f"{line}\n{line}"
+    assert chunks[1] == line
+
+
+def test_split_message_long_splits_on_space():
+    """Falls back to space splitting when no newlines."""
+    word = "hello "
+    text = word * 1000  # 6000 chars, no newlines
+    chunks = TelegramBot._split_message(text)
+    assert len(chunks) >= 2
+    assert all(len(c) <= 4096 for c in chunks)
+
+
+def test_split_message_hard_split():
+    """Hard-splits when no newline or space is available."""
+    text = "a" * 5000  # no spaces or newlines
+    chunks = TelegramBot._split_message(text)
+    assert len(chunks) == 2
+    assert chunks[0] == "a" * 4096
+    assert chunks[1] == "a" * 904
+
+
+@respx.mock
+def test_empty_response_replaced():
+    """Empty agent response is replaced with a placeholder."""
+    bot = TelegramBot(token=TOKEN)
+    agent = MagicMock()
+    agent.run.return_value = ""
+    lock = threading.Lock()
+
+    send_route = respx.post(f"{BASE}/sendMessage").mock(
+        return_value=httpx.Response(200, json={"ok": True})
+    )
+    respx.post(f"{BASE}/sendChatAction").mock(
+        return_value=httpx.Response(200, json={"ok": True})
+    )
+
+    updates = {"ok": True, "result": [_make_update(100, 42, "hi")]}
+    _run_one_poll(bot, agent, lock, updates)
+
+    payload = json.loads(send_route.calls[0].request.content)
+    assert payload["text"] == "(empty response)"
+
+
+@respx.mock
+def test_long_response_split_into_chunks():
+    """A response exceeding 4096 chars is split into multiple messages."""
+    bot = TelegramBot(token=TOKEN)
+    agent = MagicMock()
+    agent.run.return_value = "a" * 5000
+    lock = threading.Lock()
+
+    send_route = respx.post(f"{BASE}/sendMessage").mock(
+        return_value=httpx.Response(200, json={"ok": True})
+    )
+    respx.post(f"{BASE}/sendChatAction").mock(
+        return_value=httpx.Response(200, json={"ok": True})
+    )
+
+    updates = {"ok": True, "result": [_make_update(100, 42, "hi")]}
+    _run_one_poll(bot, agent, lock, updates)
+
+    assert send_route.call_count == 2
+    first = json.loads(send_route.calls[0].request.content)
+    second = json.loads(send_route.calls[1].request.content)
+    # Only the first chunk should be a reply.
+    assert "reply_parameters" in first
+    assert "reply_parameters" not in second
+
+
+@respx.mock
+def test_send_message_logs_error(capsys):
+    """sendMessage errors are logged, not silently swallowed."""
+    bot = TelegramBot(token=TOKEN)
+
+    respx.post(f"{BASE}/sendMessage").mock(
+        return_value=httpx.Response(400, json={
+            "ok": False,
+            "description": "Bad Request: message is too long",
+        })
+    )
+
+    bot._send_message(42, "test")
+
+    captured = capsys.readouterr()
+    assert "sendMessage failed" in captured.out
+    assert "400" in captured.out

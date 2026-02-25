@@ -148,6 +148,21 @@ python -m src.main attach
 
 Detach with `quit` — the agent keeps running and retains the full conversation. Reattach anytime.
 
+Manage the daemon:
+
+```bash
+python -m src.main status   # check if the daemon is running
+python -m src.main stop     # stop the daemon
+```
+
+View live logs:
+
+```bash
+tail -f agent.log
+```
+
+The log path is configurable via `DAEMON_LOG_PATH` in `.env` (default: `agent.log`).
+
 ### Telegram
 
 1. Create a bot via [@BotFather](https://t.me/BotFather)

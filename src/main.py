@@ -9,22 +9,28 @@ from pathlib import Path
 from src.agent import SYSTEM_PROMPT, Agent
 from src.config import Config
 from src.context import ContextManager
-from src.history import ConversationHistory
-from src.events import AgentEvent
+from src.events import AgentEvent, EventEmitter
 from src.formatting import format_event
+from src.history import ConversationHistory
 from src.embeddings import EmbeddingClient
 from src.llm import LLMClient
 from src.memory import MemoryStore
+from src.calendar_store import CalendarConnectionStore
+from src.email_store import EmailAccountStore
 from src.repos import RepoStore
 from src.scheduler import Scheduler, SchedulerStore
+from src.subagent import SubagentManager
 from src.tools import (
     BraveSearchTool,
+    CalendarTool,
     CodexTool,
+    EmailTool,
     GitHubTool,
     MemoryTool,
     ReposTool,
     SchedulerTool,
     ShellTool,
+    SubagentTool,
     ToolRegistry,
 )
 
@@ -94,6 +100,8 @@ def create_agent(
     config: Config,
     scheduler_store: SchedulerStore | None = None,
     repo_store: RepoStore | None = None,
+    calendar_store: CalendarConnectionStore | None = None,
+    email_store: EmailAccountStore | None = None,
 ) -> Agent:
     """Wire up all components and return a configured Agent."""
     llm = LLMClient(
@@ -133,6 +141,49 @@ def create_agent(
         registry.register(SchedulerTool(store=scheduler_store))
     if repo_store:
         registry.register(ReposTool(store=repo_store))
+    if calendar_store:
+        registry.register(CalendarTool(store=calendar_store))
+    if email_store:
+        registry.register(EmailTool(store=email_store))
+
+    # Subagent system: factory creates isolated agents for subtasks
+    emitter = EventEmitter()
+
+    def _subagent_factory(task: str) -> Agent:
+        sub_llm = LLMClient(
+            api_key=config.openai_api_key,
+            model=config.openai_model,
+            base_url=config.openai_base_url,
+        )
+        sub_registry = ToolRegistry()
+        sub_registry.register(BraveSearchTool(api_key=config.brave_search_api_key))
+        sub_registry.register(ShellTool(
+            command_timeout=config.shell_command_timeout,
+            max_output=config.shell_max_output,
+        ))
+        if config.github_token:
+            sub_registry.register(GitHubTool(
+                token=config.github_token,
+                max_output=config.shell_max_output,
+            ))
+        sub_prompt = (
+            "You are a focused sub-agent working on a specific task. "
+            "Complete the task thoroughly and return a clear, concise result. "
+            "Do not ask clarifying questions — work with what you have."
+        )
+        return Agent(
+            llm=sub_llm,
+            registry=sub_registry,
+            system_prompt=sub_prompt,
+            max_tool_rounds=config.subagent_tool_rounds,
+        )
+
+    subagent_manager = SubagentManager(
+        agent_factory=_subagent_factory,
+        emitter=emitter,
+        max_concurrent=config.max_subagents,
+    )
+    registry.register(SubagentTool(manager=subagent_manager))
 
     context_manager = ContextManager(
         llm=llm,
@@ -152,6 +203,7 @@ def create_agent(
         context_manager=context_manager,
         history=history,
         max_tool_rounds=config.max_tool_rounds,
+        emitter=emitter,
     )
 
 
@@ -227,6 +279,8 @@ def serve(config: Config) -> None:
     # Create persistent stores
     scheduler_store = SchedulerStore(db_path=config.scheduler_db_path)
     repo_store = RepoStore(db_path=config.repos_db_path)
+    calendar_store = CalendarConnectionStore(db_path=config.calendar_db_path)
+    email_store = EmailAccountStore(db_path=config.email_db_path)
 
     # Load static scheduled tasks from config
     _load_static_tasks(scheduler_store, config.scheduler_tasks)
@@ -235,6 +289,8 @@ def serve(config: Config) -> None:
         config,
         scheduler_store=scheduler_store,
         repo_store=repo_store,
+        calendar_store=calendar_store,
+        email_store=email_store,
     )
     agent.emitter.on(_print_event)
 

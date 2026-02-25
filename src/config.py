@@ -37,6 +37,10 @@ class Config:
     scheduler_poll_interval: int
     scheduler_tasks: str
     repos_db_path: str
+    calendar_db_path: str
+    email_db_path: str
+    max_subagents: int
+    subagent_tool_rounds: int
 
     @classmethod
     def from_env(cls, env_path: str = ".env") -> "Config":
@@ -79,6 +83,10 @@ class Config:
         scheduler_poll_interval = int(os.getenv("SCHEDULER_POLL_INTERVAL", "30"))
         scheduler_tasks = os.getenv("SCHEDULER_TASKS", "")
         repos_db_path = os.getenv("REPOS_DB_PATH", "repos.db")
+        calendar_db_path = os.getenv("CALENDAR_DB_PATH", "calendar.db")
+        email_db_path = os.getenv("EMAIL_DB_PATH", "email.db")
+        max_subagents = int(os.getenv("MAX_SUBAGENTS", "10"))
+        subagent_tool_rounds = int(os.getenv("SUBAGENT_TOOL_ROUNDS", "15"))
 
         if not openai_key:
             raise ValueError("OPENAI_API_KEY is required")
@@ -113,4 +121,8 @@ class Config:
             scheduler_poll_interval=scheduler_poll_interval,
             scheduler_tasks=scheduler_tasks,
             repos_db_path=repos_db_path,
+            calendar_db_path=calendar_db_path,
+            email_db_path=email_db_path,
+            max_subagents=max_subagents,
+            subagent_tool_rounds=subagent_tool_rounds,
         )

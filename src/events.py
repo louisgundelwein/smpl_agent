@@ -56,6 +56,24 @@ class ContextCompressedEvent:
     messages_removed: int
 
 
+@dataclass(frozen=True)
+class SubagentSpawnedEvent:
+    """Emitted when a subagent is created and its thread starts."""
+
+    subagent_id: str
+    task: str
+
+
+@dataclass(frozen=True)
+class SubagentStatusEvent:
+    """Emitted when a subagent's status changes."""
+
+    subagent_id: str
+    task: str
+    status: str  # "running", "completed", "failed", "cancelled"
+    error: str | None = None
+
+
 AgentEvent = (
     ToolStartEvent
     | ToolEndEvent
@@ -63,6 +81,8 @@ AgentEvent = (
     | LLMStartEvent
     | LLMEndEvent
     | ContextCompressedEvent
+    | SubagentSpawnedEvent
+    | SubagentStatusEvent
 )
 
 EventCallback = Callable[[AgentEvent], None]

@@ -59,8 +59,17 @@ def mock_config():
         github_token="test-github-token",
         history_path="test_history.json",
         whisper_model="openai/whisper-large-v3-turbo",
+        max_tool_rounds=25,
         daemon_pid_path="test_agent.pid",
         daemon_log_path="test_agent.log",
+        scheduler_db_path=":memory:",
+        scheduler_poll_interval=30,
+        scheduler_tasks="",
+        repos_db_path=":memory:",
+        calendar_db_path=":memory:",
+        email_db_path=":memory:",
+        max_subagents=10,
+        subagent_tool_rounds=15,
     )
 
 

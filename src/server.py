@@ -12,6 +12,8 @@ from src.events import (
     ContextCompressedEvent,
     LLMEndEvent,
     LLMStartEvent,
+    SubagentSpawnedEvent,
+    SubagentStatusEvent,
     ToolEndEvent,
     ToolErrorEvent,
     ToolStartEvent,
@@ -62,6 +64,20 @@ def _event_to_message(event: AgentEvent) -> dict[str, Any]:
             "original_tokens": event.original_tokens,
             "compressed_tokens": event.compressed_tokens,
             "messages_removed": event.messages_removed,
+        }
+    elif isinstance(event, SubagentSpawnedEvent):
+        return {
+            "type": "subagent_spawned",
+            "subagent_id": event.subagent_id,
+            "task": event.task,
+        }
+    elif isinstance(event, SubagentStatusEvent):
+        return {
+            "type": "subagent_status",
+            "subagent_id": event.subagent_id,
+            "task": event.task,
+            "status": event.status,
+            "error": event.error,
         }
     # Defensive: log unknown event types instead of crashing
     logger.warning("Unknown event type: %s", type(event).__name__)

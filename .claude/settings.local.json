@@ -20,7 +20,24 @@
       "WebFetch(domain:openclawsoul.org)",
       "Bash(del \"C:\\\\Users\\\\louis\\\\Desktop\\\\Agent\\\\src\\\\tools\\\\claude_code.py\")",
       "Bash(git rebase:*)",
-      "Bash(GIT_EDITOR=true git rebase:*)"
+      "Bash(GIT_EDITOR=true git rebase:*)",
+      "Bash(python3 -m pytest:*)",
+      "Bash(pip3 install:*)",
+      "Bash(pip3 run:*)",
+      "Bash(pip3 show:*)",
+      "Bash(uv venv:*)",
+      "Bash(source:*)",
+      "Bash(uv pip install:*)",
+      "Bash(.venv/bin/pytest:*)",
+      "Bash(pytest:*)",
+      "mcp__Desktop_Commander__read_file",
+      "Bash(python3:*)",
+      "WebFetch(domain:pypi.org)",
+      "Bash(python -m pip install:*)",
+      "Bash(find:*)",
+      "Bash(/Users/louisgundelwein/Code/smpl_agent/.venv/bin/pip install:*)",
+      "Bash(/Users/louisgundelwein/Code/smpl_agent/.venv/bin/python -m pip install:*)",
+      "Bash(/Users/louisgundelwein/Code/smpl_agent/.venv/bin/python:*)"
     ]
   }
 }

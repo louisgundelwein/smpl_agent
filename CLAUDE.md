@@ -24,6 +24,8 @@ Terminal-based AI agent with OpenAI-compatible LLM integration and agentic tool 
   - `transcription.py` - Whisper speech-to-text (lazy dependency install, lazy model load)
   - `scheduler.py` - Scheduled task engine (SQLite persistence, cron parsing, polling loop)
   - `repos.py` - Repository registry (SQLite persistence, tracks known repos)
+  - `calendar_store.py` - CalDAV connection registry (SQLite persistence)
+  - `email_store.py` - Email account registry (SQLite persistence, IMAP/SMTP credentials)
   - `tools/` - Tool system
     - `base.py` - Abstract `Tool` base class (the contract every tool must follow)
     - `registry.py` - `ToolRegistry`: registers tools, provides schemas to LLM, dispatches calls
@@ -34,6 +36,10 @@ Terminal-based AI agent with OpenAI-compatible LLM integration and agentic tool 
     - `github.py` - GitHub REST API integration
     - `scheduler.py` - Scheduler tool (create, list, delete, enable, disable scheduled tasks)
     - `repos.py` - Repos tool (add, list, remove, get, update known repositories)
+    - `calendar.py` - Calendar tool (CalDAV: manage connections, calendars, events, reminders)
+    - `email.py` - Email tool (IMAP/SMTP: manage accounts, read/search/send emails)
+    - `subagent.py` - Subagent tool (spawn, status, result, cancel concurrent subagents)
+  - `subagent.py` - Subagent manager (concurrent task execution via background threads)
 - `tests/` - pytest test suite mirroring `src/` structure
 
 ## Commands
@@ -97,6 +103,16 @@ All configuration comes from `.env` (never committed). See `.env.example` for th
 
 ### Repository Registry
 - `REPOS_DB_PATH` -- SQLite database path (default: `repos.db`)
+
+### Calendar (CalDAV)
+- `CALENDAR_DB_PATH` -- SQLite database path for CalDAV connections (default: `calendar.db`)
+
+### Email (IMAP/SMTP)
+- `EMAIL_DB_PATH` -- SQLite database path for email accounts (default: `email.db`)
+
+### Subagents
+- `MAX_SUBAGENTS` -- Maximum concurrent subagents (default: `10`)
+- `SUBAGENT_TOOL_ROUNDS` -- Max tool rounds per subagent (default: `15`)
 
 ### Daemon
 - `DAEMON_PID_PATH` -- PID file location (default: `agent.pid`)
@@ -174,6 +190,8 @@ The terminal shows:
 - `  [tool] <name>(<args>)` when a tool call starts
 - `  [tool] done (Xms)` or `  [tool] error: <msg> (Xms)` when it finishes
 - `  [context] compressed: ...` when context compression triggers
+- `  [subagent] spawned <id>: <task>` when a subagent is created
+- `  [subagent] <id> → <status>` when a subagent's status changes
 - `Agent:` for the final response
 
 All formatting lives in `src/formatting.py` (single source of truth for REPL and client). Do not add progress spinners, colors, or rich formatting unless explicitly requested. Keep the output predictable so it's easy to parse when testing or piping.
