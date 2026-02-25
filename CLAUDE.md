@@ -26,6 +26,7 @@ Terminal-based AI agent with OpenAI-compatible LLM integration and agentic tool 
   - `repos.py` - Repository registry (SQLite persistence, tracks known repos)
   - `calendar_store.py` - CalDAV connection registry (SQLite persistence)
   - `email_store.py` - Email account registry (SQLite persistence, IMAP/SMTP credentials)
+  - `hyperliquid_store.py` - Hyperliquid trade log, position snapshots, strategy state (Postgres)
   - `tools/` - Tool system
     - `base.py` - Abstract `Tool` base class (the contract every tool must follow)
     - `registry.py` - `ToolRegistry`: registers tools, provides schemas to LLM, dispatches calls
@@ -38,6 +39,7 @@ Terminal-based AI agent with OpenAI-compatible LLM integration and agentic tool 
     - `repos.py` - Repos tool (add, list, remove, get, update known repositories)
     - `calendar.py` - Calendar tool (CalDAV: manage connections, calendars, events, reminders)
     - `email.py` - Email tool (IMAP/SMTP: manage accounts, read/search/send emails)
+    - `hyperliquid.py` - Hyperliquid trading tool (positions, orders, market data, strategies)
     - `subagent.py` - Subagent tool (spawn, status, result, cancel concurrent subagents)
   - `subagent.py` - Subagent manager (concurrent task execution via background threads)
 - `tests/` - pytest test suite mirroring `src/` structure
@@ -109,6 +111,16 @@ All configuration comes from `.env` (never committed). See `.env.example` for th
 
 ### Email (IMAP/SMTP)
 - `EMAIL_DB_PATH` -- SQLite database path for email accounts (default: `email.db`)
+
+### Hyperliquid Trading
+- `HYPERLIQUID_WALLET_KEY` -- Delegated API wallet private key (optional, enables `hyperliquid` tool)
+- `HYPERLIQUID_WALLET_ADDRESS` -- Main wallet address (required with wallet key)
+- `HYPERLIQUID_TESTNET` -- Use testnet (default: `true`)
+- `HYPERLIQUID_MAX_POSITION_USD` -- Max position size in USD (default: `10000`)
+- `HYPERLIQUID_MAX_LOSS_USD` -- Daily loss limit in USD (default: `1000`)
+- `HYPERLIQUID_MAX_LEVERAGE` -- Max leverage (default: `20`)
+- Generate an API wallet at https://app.hyperliquid.xyz/API (mainnet) or https://app.hyperliquid-testnet.xyz/API (testnet)
+- Safety: testnet default, position size limit, daily loss limit, leverage cap, rate limiting (1200 weight/min)
 
 ### Subagents
 - `MAX_SUBAGENTS` -- Maximum concurrent subagents (default: `10`)

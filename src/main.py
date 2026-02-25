@@ -18,6 +18,7 @@ from src.llm import LLMClient
 from src.memory import MemoryStore
 from src.calendar_store import CalendarConnectionStore
 from src.email_store import EmailAccountStore
+from src.hyperliquid_store import HyperliquidStore
 from src.repos import RepoStore
 from src.scheduler import Scheduler, SchedulerStore
 from src.subagent import SubagentManager
@@ -27,6 +28,7 @@ from src.tools import (
     CodexTool,
     EmailTool,
     GitHubTool,
+    HyperliquidTool,
     MemoryTool,
     ReposTool,
     SchedulerTool,
@@ -104,6 +106,7 @@ def create_agent(
     repo_store: RepoStore | None = None,
     calendar_store: CalendarConnectionStore | None = None,
     email_store: EmailAccountStore | None = None,
+    hyperliquid_store: HyperliquidStore | None = None,
 ) -> Agent:
     """Wire up all components and return a configured Agent."""
     llm = LLMClient(
@@ -149,6 +152,16 @@ def create_agent(
         registry.register(CalendarTool(store=calendar_store))
     if email_store:
         registry.register(EmailTool(store=email_store))
+    if hyperliquid_store and config.hyperliquid_wallet_key and config.hyperliquid_wallet_address:
+        registry.register(HyperliquidTool(
+            store=hyperliquid_store,
+            wallet_key=config.hyperliquid_wallet_key,
+            wallet_address=config.hyperliquid_wallet_address,
+            testnet=config.hyperliquid_testnet,
+            max_position_size_usd=config.hyperliquid_max_position_usd,
+            max_loss_usd=config.hyperliquid_max_loss_usd,
+            max_leverage=config.hyperliquid_max_leverage,
+        ))
 
     # Subagent system: factory creates isolated agents for subtasks
     emitter = EventEmitter()
@@ -290,6 +303,7 @@ def serve(config: Config) -> None:
     repo_store = RepoStore(db=db)
     calendar_store = CalendarConnectionStore(db=db)
     email_store = EmailAccountStore(db=db)
+    hyperliquid_store = HyperliquidStore(db=db) if config.hyperliquid_wallet_key else None
 
     # Load static scheduled tasks from config
     _load_static_tasks(scheduler_store, config.scheduler_tasks)
@@ -301,6 +315,7 @@ def serve(config: Config) -> None:
         repo_store=repo_store,
         calendar_store=calendar_store,
         email_store=email_store,
+        hyperliquid_store=hyperliquid_store,
     )
     agent.emitter.on(_print_event)
 

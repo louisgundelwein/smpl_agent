@@ -38,6 +38,12 @@ class Config:
     scheduler_tasks: str
     max_subagents: int
     subagent_tool_rounds: int
+    hyperliquid_wallet_key: str | None
+    hyperliquid_wallet_address: str | None
+    hyperliquid_testnet: bool
+    hyperliquid_max_position_usd: float
+    hyperliquid_max_loss_usd: float
+    hyperliquid_max_leverage: int
 
     @classmethod
     def from_env(cls, env_path: str = ".env") -> "Config":
@@ -81,6 +87,12 @@ class Config:
         scheduler_tasks = os.getenv("SCHEDULER_TASKS", "")
         max_subagents = int(os.getenv("MAX_SUBAGENTS", "10"))
         subagent_tool_rounds = int(os.getenv("SUBAGENT_TOOL_ROUNDS", "15"))
+        hyperliquid_wallet_key = os.getenv("HYPERLIQUID_WALLET_KEY") or None
+        hyperliquid_wallet_address = os.getenv("HYPERLIQUID_WALLET_ADDRESS") or None
+        hyperliquid_testnet = os.getenv("HYPERLIQUID_TESTNET", "true").lower() in ("true", "1", "yes")
+        hyperliquid_max_position_usd = float(os.getenv("HYPERLIQUID_MAX_POSITION_USD", "10000"))
+        hyperliquid_max_loss_usd = float(os.getenv("HYPERLIQUID_MAX_LOSS_USD", "1000"))
+        hyperliquid_max_leverage = int(os.getenv("HYPERLIQUID_MAX_LEVERAGE", "20"))
 
         if not openai_key:
             raise ValueError("OPENAI_API_KEY is required")
@@ -118,4 +130,10 @@ class Config:
             scheduler_tasks=scheduler_tasks,
             max_subagents=max_subagents,
             subagent_tool_rounds=subagent_tool_rounds,
+            hyperliquid_wallet_key=hyperliquid_wallet_key,
+            hyperliquid_wallet_address=hyperliquid_wallet_address,
+            hyperliquid_testnet=hyperliquid_testnet,
+            hyperliquid_max_position_usd=hyperliquid_max_position_usd,
+            hyperliquid_max_loss_usd=hyperliquid_max_loss_usd,
+            hyperliquid_max_leverage=hyperliquid_max_leverage,
         )
