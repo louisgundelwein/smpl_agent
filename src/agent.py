@@ -11,11 +11,14 @@ from src.events import (
     EventEmitter,
     LLMEndEvent,
     LLMStartEvent,
+    SubagentResultsCollectedEvent,
+    SubagentWaitEvent,
     ToolEndEvent,
     ToolErrorEvent,
     ToolStartEvent,
 )
 from src.llm import LLMClient
+from src.subagent import SubagentManager
 from src.tools.registry import ToolRegistry
 
 
@@ -54,6 +57,7 @@ class Agent:
         emitter: EventEmitter | None = None,
         context_manager: ContextManager | None = None,
         history: ConversationHistory | None = None,
+        subagent_manager: SubagentManager | None = None,
     ) -> None:
         self._llm = llm
         self._registry = registry
@@ -61,6 +65,7 @@ class Agent:
         self._emitter = emitter or EventEmitter()
         self._context_manager = context_manager
         self._history = history
+        self._subagent_manager = subagent_manager
 
         # Load persisted conversation or start fresh.
         # Always replace the system prompt with the current one
@@ -145,6 +150,34 @@ class Agent:
             self._messages.append(message.model_dump(exclude_none=True))
 
             if not message.tool_calls:
+                # If subagents are still running, wait for them and
+                # re-enter the loop so the LLM can synthesize results.
+                active = (
+                    self._subagent_manager.active_count()
+                    if self._subagent_manager
+                    else 0
+                )
+                if active > 0:
+                    self._emitter.emit(SubagentWaitEvent(active_count=active))
+
+                    t0 = time.monotonic()
+                    results = self._subagent_manager.wait_all()
+                    wait_ms = int((time.monotonic() - t0) * 1000)
+
+                    self._emitter.emit(
+                        SubagentResultsCollectedEvent(
+                            count=len(results), duration_ms=wait_ms
+                        )
+                    )
+
+                    self._messages.append(
+                        {
+                            "role": "user",
+                            "content": self._format_subagent_results(results),
+                        }
+                    )
+                    continue
+
                 self._save_history()
                 return message.content or ""
 
@@ -178,6 +211,29 @@ class Agent:
         raise RuntimeError(
             f"Agent exceeded maximum tool rounds ({self._max_tool_rounds})"
         )
+
+    @staticmethod
+    def _format_subagent_results(results: list[dict[str, Any]]) -> str:
+        """Format subagent results into a synthetic user message."""
+        lines = [
+            "[Subagent results are now available. "
+            "Summarize them for the user.]\n"
+        ]
+        for r in results:
+            sid = r["id"]
+            task = r["task"]
+            status = r["status"]
+            if status == "completed":
+                lines.append(f"--- Subagent {sid} ({task}) ---\n{r['result']}\n")
+            elif status == "failed":
+                lines.append(
+                    f"--- Subagent {sid} ({task}) ---\nFailed: {r['error']}\n"
+                )
+            else:
+                lines.append(
+                    f"--- Subagent {sid} ({task}) ---\nStatus: {status}\n"
+                )
+        return "\n".join(lines)
 
     def _save_history(self) -> None:
         """Persist current messages if history is configured."""

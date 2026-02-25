@@ -207,7 +207,7 @@ def create_agent(
         max_tokens=config.context_max_tokens,
         preserve_recent=config.context_preserve_recent,
     )
-    history = ConversationHistory(config.history_path)
+    history = ConversationHistory(db)
 
     system_prompt = _load_system_prompt(config.soul_path) + _build_system_context()
     if repo_store:
@@ -221,6 +221,7 @@ def create_agent(
         history=history,
         max_tool_rounds=config.max_tool_rounds,
         emitter=emitter,
+        subagent_manager=subagent_manager,
     )
 
 
@@ -458,7 +459,21 @@ def main() -> None:
         status(config)
     else:
         db = Database(config.database_url)
-        agent = create_agent(config, db=db)
+        scheduler_store = SchedulerStore(db=db)
+        repo_store = RepoStore(db=db)
+        calendar_store = CalendarConnectionStore(db=db)
+        email_store = EmailAccountStore(db=db)
+        hyperliquid_store = HyperliquidStore(db=db) if config.hyperliquid_wallet_key else None
+        _load_static_tasks(scheduler_store, config.scheduler_tasks)
+        agent = create_agent(
+            config,
+            db=db,
+            scheduler_store=scheduler_store,
+            repo_store=repo_store,
+            calendar_store=calendar_store,
+            email_store=email_store,
+            hyperliquid_store=hyperliquid_store,
+        )
         repl(agent, db)
 
 

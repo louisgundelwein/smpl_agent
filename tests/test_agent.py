@@ -446,3 +446,149 @@ def test_tool_end_has_duration_ms(registry_with_dummy):
     tool_ends = [e for e in events if isinstance(e, ToolEndEvent)]
     assert len(tool_ends) == 1
     assert tool_ends[0].duration_ms >= 0
+
+
+# --- Subagent auto-collection tests ---
+
+
+def test_subagent_results_collected_after_text_response(registry_with_dummy):
+    """When LLM returns text and subagents are active, wait and re-enter loop."""
+    mock_llm = MagicMock()
+    mock_sm = MagicMock()
+
+    first_msg = _make_message(content="I've started the subagents.")
+    final_msg = _make_message(content="Here are the combined results.")
+
+    mock_llm.chat.side_effect = [
+        _make_response(first_msg),
+        _make_response(final_msg),
+    ]
+
+    # First call: 2 active, second call (after wait): 0 active
+    mock_sm.active_count.side_effect = [2, 0]
+    mock_sm.wait_all.return_value = [
+        {"id": "aaa", "task": "task 1", "status": "completed", "result": "done 1", "error": None, "elapsed_seconds": 1.0},
+        {"id": "bbb", "task": "task 2", "status": "completed", "result": "done 2", "error": None, "elapsed_seconds": 2.0},
+    ]
+
+    agent = Agent(
+        llm=mock_llm,
+        registry=registry_with_dummy,
+        subagent_manager=mock_sm,
+    )
+    result = agent.run("do parallel work")
+
+    assert result == "Here are the combined results."
+    assert mock_llm.chat.call_count == 2
+    mock_sm.wait_all.assert_called_once()
+
+    # Verify synthetic user message was injected
+    user_messages = [
+        m for m in agent.messages
+        if isinstance(m, dict) and m.get("role") == "user"
+    ]
+    assert len(user_messages) == 2  # original + synthetic
+    assert "Subagent results" in user_messages[1]["content"]
+
+
+def test_no_subagent_wait_when_none_active(registry_with_dummy):
+    """When no subagents are active, return immediately."""
+    mock_llm = MagicMock()
+    mock_sm = MagicMock()
+    mock_sm.active_count.return_value = 0
+
+    msg = _make_message(content="No subagents running.")
+    mock_llm.chat.return_value = _make_response(msg)
+
+    agent = Agent(
+        llm=mock_llm,
+        registry=registry_with_dummy,
+        subagent_manager=mock_sm,
+    )
+    result = agent.run("hi")
+
+    assert result == "No subagents running."
+    assert mock_llm.chat.call_count == 1
+    mock_sm.wait_all.assert_not_called()
+
+
+def test_no_subagent_wait_when_manager_is_none(registry_with_dummy):
+    """When subagent_manager is None (default), return immediately."""
+    mock_llm = MagicMock()
+    msg = _make_message(content="No manager.")
+    mock_llm.chat.return_value = _make_response(msg)
+
+    agent = Agent(llm=mock_llm, registry=registry_with_dummy)
+    result = agent.run("hi")
+
+    assert result == "No manager."
+    assert mock_llm.chat.call_count == 1
+
+
+def test_subagent_wait_emits_events(registry_with_dummy):
+    """SubagentWaitEvent and SubagentResultsCollectedEvent are emitted."""
+    from src.events import SubagentResultsCollectedEvent, SubagentWaitEvent
+
+    mock_llm = MagicMock()
+    mock_sm = MagicMock()
+
+    first_msg = _make_message(content="Started subagents.")
+    final_msg = _make_message(content="Done.")
+    mock_llm.chat.side_effect = [
+        _make_response(first_msg),
+        _make_response(final_msg),
+    ]
+    mock_sm.active_count.side_effect = [1, 0]
+    mock_sm.wait_all.return_value = [
+        {"id": "aaa", "task": "t", "status": "completed", "result": "r", "error": None, "elapsed_seconds": 1.0},
+    ]
+
+    events = []
+    emitter = EventEmitter()
+    emitter.on(lambda e: events.append(e))
+
+    agent = Agent(
+        llm=mock_llm,
+        registry=registry_with_dummy,
+        subagent_manager=mock_sm,
+        emitter=emitter,
+    )
+    agent.run("test")
+
+    wait_events = [e for e in events if isinstance(e, SubagentWaitEvent)]
+    collected_events = [e for e in events if isinstance(e, SubagentResultsCollectedEvent)]
+    assert len(wait_events) == 1
+    assert wait_events[0].active_count == 1
+    assert len(collected_events) == 1
+    assert collected_events[0].count == 1
+
+
+def test_subagent_failed_result_included(registry_with_dummy):
+    """Failed subagent results are included in the injected message."""
+    mock_llm = MagicMock()
+    mock_sm = MagicMock()
+
+    first_msg = _make_message(content="Started subagent.")
+    final_msg = _make_message(content="The subagent failed.")
+    mock_llm.chat.side_effect = [
+        _make_response(first_msg),
+        _make_response(final_msg),
+    ]
+    mock_sm.active_count.side_effect = [1, 0]
+    mock_sm.wait_all.return_value = [
+        {"id": "aaa", "task": "task 1", "status": "failed", "result": None, "error": "LLM exploded", "elapsed_seconds": 0.5},
+    ]
+
+    agent = Agent(
+        llm=mock_llm,
+        registry=registry_with_dummy,
+        subagent_manager=mock_sm,
+    )
+    agent.run("test")
+
+    user_messages = [
+        m for m in agent.messages
+        if isinstance(m, dict) and m.get("role") == "user"
+    ]
+    synthetic = user_messages[1]["content"]
+    assert "Failed: LLM exploded" in synthetic

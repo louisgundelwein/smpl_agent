@@ -44,6 +44,26 @@ def test_embed_returns_vectors():
         mock_client.embeddings.create.assert_called_once_with(
             input=["hello", "world"],
             model="text-embedding-3-large",
+        )
+
+
+def test_embed_gemini_sends_task_type():
+    with patch("src.embeddings.OpenAI") as MockOpenAI:
+        mock_client = MagicMock()
+        MockOpenAI.return_value = mock_client
+
+        mock_emb = MagicMock()
+        mock_emb.embedding = [0.1, 0.2, 0.3]
+        mock_response = MagicMock()
+        mock_response.data = [mock_emb]
+        mock_client.embeddings.create.return_value = mock_response
+
+        client = EmbeddingClient(api_key="test-key", model="gemini-embedding-001")
+        client.embed(["hello"])
+
+        mock_client.embeddings.create.assert_called_once_with(
+            input=["hello"],
+            model="gemini-embedding-001",
             extra_body={"task_type": "SEMANTIC_SIMILARITY"},
         )
 

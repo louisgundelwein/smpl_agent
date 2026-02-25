@@ -11,9 +11,30 @@ from src.tools.calendar import CalendarTool
 
 @pytest.fixture()
 def store():
-    s = CalendarConnectionStore(db_path=":memory:")
+    """Fake CalendarConnectionStore backed by an in-memory dict (no DB required)."""
+    from unittest.mock import MagicMock
+    s = MagicMock(spec=CalendarConnectionStore)
+    _data = {}
+    _seq = iter(range(1, 10_000))
+
+    def _add(name, url, username, password, provider="caldav"):
+        if name in _data:
+            import psycopg2.errors
+            raise psycopg2.errors.UniqueViolation("duplicate key")
+        conn_id = next(_seq)
+        _data[name] = dict(id=conn_id, name=name, url=url, username=username,
+                           password=password, provider=provider,
+                           added_at="2026-01-01T00:00:00+00:00")
+        return conn_id
+
+    s.add.side_effect = _add
+    s.list_all.side_effect = lambda: [
+        {k: v for k, v in c.items() if k != "password"} for c in _data.values()
+    ]
+    s.get.side_effect = lambda name: _data.get(name)
+    s.remove.side_effect = lambda name: bool(_data.pop(name, None))
+    s.count.side_effect = lambda: len(_data)
     yield s
-    s.close()
 
 
 @pytest.fixture()

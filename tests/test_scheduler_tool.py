@@ -10,7 +10,49 @@ from src.tools.scheduler import SchedulerTool
 
 @pytest.fixture
 def store():
-    return SchedulerStore(db_path=":memory:")
+    """Fake SchedulerStore backed by an in-memory dict (no DB required)."""
+    from datetime import datetime, timezone
+    from unittest.mock import MagicMock
+    from src.scheduler import compute_next_run
+    s = MagicMock(spec=SchedulerStore)
+    _data = {}
+    _seq = iter(range(1, 10_000))
+
+    def _add(name, prompt, cron_expression, deliver_to="memory", telegram_chat_id=None):
+        if name in _data:
+            import psycopg2.errors
+            raise psycopg2.errors.UniqueViolation("duplicate key")
+        task_id = next(_seq)
+        now = datetime.now(timezone.utc)
+        _data[name] = dict(
+            id=task_id, name=name, prompt=prompt, cron_expression=cron_expression,
+            enabled=True, deliver_to=deliver_to, telegram_chat_id=telegram_chat_id,
+            last_run_at=None,
+            next_run_at=compute_next_run(cron_expression, after=now).isoformat(),
+            created_at=now.isoformat(),
+        )
+        return task_id
+
+    def _upsert(name, **kwargs):
+        if name in _data:
+            _data[name].update(kwargs)
+        else:
+            _add(name, **kwargs)
+
+    def _toggle(name, enabled):
+        if name not in _data:
+            return False
+        _data[name]["enabled"] = enabled
+        return True
+
+    s.add.side_effect = _add
+    s.upsert.side_effect = _upsert
+    s.list_all.side_effect = lambda: list(_data.values())
+    s.get.side_effect = lambda name: _data.get(name)
+    s.delete.side_effect = lambda name: bool(_data.pop(name, None))
+    s.toggle.side_effect = _toggle
+    s.count.side_effect = lambda: len(_data)
+    return s
 
 
 @pytest.fixture

@@ -7,8 +7,10 @@ from src.events import (
     ContextCompressedEvent,
     LLMEndEvent,
     LLMStartEvent,
+    SubagentResultsCollectedEvent,
     SubagentSpawnedEvent,
     SubagentStatusEvent,
+    SubagentWaitEvent,
     ToolEndEvent,
     ToolErrorEvent,
     ToolStartEvent,
@@ -45,6 +47,10 @@ def format_event(event: AgentEvent) -> str | None:
     elif isinstance(event, SubagentStatusEvent):
         suffix = f" error: {event.error}" if event.error else ""
         return f"  [subagent] {event.subagent_id} \u2192 {event.status}{suffix}"
+    elif isinstance(event, SubagentWaitEvent):
+        return f"  [subagent] waiting for {event.active_count} subagent(s) to finish..."
+    elif isinstance(event, SubagentResultsCollectedEvent):
+        return f"  [subagent] collected {event.count} result(s) ({event.duration_ms}ms)"
     return None
 
 
@@ -96,6 +102,16 @@ def format_message(msg: dict[str, Any]) -> str | None:
         return (
             f"  [subagent] {msg.get('subagent_id', '?')} \u2192 "
             f"{msg.get('status', '?')}{suffix}"
+        )
+    elif msg_type == "subagent_wait":
+        return (
+            f"  [subagent] waiting for {msg.get('active_count', '?')} "
+            f"subagent(s) to finish..."
+        )
+    elif msg_type == "subagent_results_collected":
+        return (
+            f"  [subagent] collected {msg.get('count', '?')} result(s) "
+            f"({msg.get('duration_ms', '?')}ms)"
         )
 
     return None

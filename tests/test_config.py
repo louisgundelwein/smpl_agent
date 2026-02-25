@@ -4,6 +4,14 @@ import pytest
 
 from src.config import Config
 
+_DB_URL = "postgresql://u:p@localhost:5432/db"
+
+
+@pytest.fixture(autouse=True)
+def _require_database_url(monkeypatch):
+    """Set DATABASE_URL for every test in this module unless explicitly overridden."""
+    monkeypatch.setenv("DATABASE_URL", _DB_URL)
+
 
 def test_from_env_loads_keys(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
@@ -158,24 +166,45 @@ def test_custom_embedding_model(monkeypatch):
     assert config.embedding_model == "text-embedding-3-small"
 
 
-def test_default_memory_db_path(monkeypatch):
+def test_missing_database_url_raises(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "BSA-test")
-    monkeypatch.delenv("MEMORY_DB_PATH", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    with pytest.raises(ValueError, match="DATABASE_URL"):
+        Config.from_env(env_path="/dev/null")
+
+
+def test_custom_database_url(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "BSA-test")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost:5432/db")
 
     config = Config.from_env(env_path="/dev/null")
 
-    assert config.memory_db_path == "agent_memory.db"
+    assert config.database_url == "postgresql://user:pass@localhost:5432/db"
 
 
-def test_custom_memory_db_path(monkeypatch):
+def test_default_embedding_dimensions(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "BSA-test")
-    monkeypatch.setenv("MEMORY_DB_PATH", "/tmp/test.db")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@h/db")
+    monkeypatch.delenv("EMBEDDING_DIMENSIONS", raising=False)
 
     config = Config.from_env(env_path="/dev/null")
 
-    assert config.memory_db_path == "/tmp/test.db"
+    assert config.embedding_dimensions == 1024
+
+
+def test_custom_embedding_dimensions(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "BSA-test")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@h/db")
+    monkeypatch.setenv("EMBEDDING_DIMENSIONS", "768")
+
+    config = Config.from_env(env_path="/dev/null")
+
+    assert config.embedding_dimensions == 768
 
 
 def test_default_soul_path(monkeypatch):
@@ -337,25 +366,6 @@ def test_custom_github_token(monkeypatch):
 
     assert config.github_token == "ghp_test123"
 
-
-def test_default_history_path(monkeypatch):
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "BSA-test")
-    monkeypatch.delenv("HISTORY_PATH", raising=False)
-
-    config = Config.from_env(env_path="/dev/null")
-
-    assert config.history_path == "conversation_history.json"
-
-
-def test_custom_history_path(monkeypatch):
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "BSA-test")
-    monkeypatch.setenv("HISTORY_PATH", "/tmp/my_history.json")
-
-    config = Config.from_env(env_path="/dev/null")
-
-    assert config.history_path == "/tmp/my_history.json"
 
 
 def test_default_whisper_model(monkeypatch):

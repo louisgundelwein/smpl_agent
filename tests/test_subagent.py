@@ -261,3 +261,57 @@ class TestSubagentManager:
         slow_manager._gate.set()
         s1.thread.join(timeout=2.0)
         s2.thread.join(timeout=2.0)
+
+    def test_wait_all_returns_when_all_complete(self, slow_manager):
+        slow_manager.spawn("task 1")
+        slow_manager.spawn("task 2")
+        # Release gate so subagents can complete
+        slow_manager._gate.set()
+        results = slow_manager.wait_all()
+        assert len(results) == 2
+        assert all(r["status"] == "completed" for r in results)
+
+    def test_wait_all_returns_empty_when_none_active(self, manager):
+        results = manager.wait_all()
+        assert results == []
+
+    def test_wait_all_includes_failed(self, emitter):
+        gate = threading.Event()
+
+        def factory(task):
+            mock_agent = MagicMock()
+
+            def slow_fail(prompt):
+                gate.wait(timeout=5.0)
+                raise RuntimeError("boom")
+
+            mock_agent.run.side_effect = slow_fail
+            return mock_agent
+
+        mgr = SubagentManager(
+            agent_factory=factory, emitter=emitter, max_concurrent=3
+        )
+        mgr.spawn("fail task")
+        gate.set()
+        results = mgr.wait_all()
+        assert len(results) == 1
+        assert results[0]["status"] == "failed"
+
+    def test_wait_all_blocks_until_released(self, slow_manager):
+        slow_manager.spawn("slow task")
+        # Release gate from another thread after a short delay
+        def release():
+            import time
+            time.sleep(0.05)
+            slow_manager._gate.set()
+
+        threading.Thread(target=release, daemon=True).start()
+        results = slow_manager.wait_all()
+        assert len(results) == 1
+        assert results[0]["status"] == "completed"
+
+    def test_wait_all_includes_result_data(self, slow_manager):
+        slow_manager.spawn("task 1")
+        slow_manager._gate.set()
+        results = slow_manager.wait_all()
+        assert results[0]["result"] == "Result for: task 1"

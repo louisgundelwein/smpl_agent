@@ -12,9 +12,32 @@ from src.tools.email import EmailTool, _strip_html, _body_text
 
 @pytest.fixture()
 def store():
-    s = EmailAccountStore(db_path=":memory:")
+    """Fake EmailAccountStore backed by an in-memory dict (no DB required)."""
+    from unittest.mock import MagicMock
+    s = MagicMock(spec=EmailAccountStore)
+    _data = {}
+    _seq = iter(range(1, 10_000))
+
+    def _add(name, email_address, password, imap_host, smtp_host,
+             imap_port=993, smtp_port=587, provider="generic"):
+        if name in _data:
+            import psycopg2.errors
+            raise psycopg2.errors.UniqueViolation("duplicate key")
+        acc_id = next(_seq)
+        _data[name] = dict(id=acc_id, name=name, email_address=email_address,
+                           password=password, imap_host=imap_host, imap_port=imap_port,
+                           smtp_host=smtp_host, smtp_port=smtp_port,
+                           provider=provider, added_at="2026-01-01T00:00:00+00:00")
+        return acc_id
+
+    s.add.side_effect = _add
+    s.list_all.side_effect = lambda: [
+        {k: v for k, v in acc.items() if k != "password"} for acc in _data.values()
+    ]
+    s.get.side_effect = lambda name: _data.get(name)
+    s.remove.side_effect = lambda name: bool(_data.pop(name, None))
+    s.count.side_effect = lambda: len(_data)
     yield s
-    s.close()
 
 
 @pytest.fixture()
