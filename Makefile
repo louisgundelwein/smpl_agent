@@ -1,6 +1,6 @@
 VENV   := .venv
 PYTHON := $(VENV)/bin/python
-PIP    := $(VENV)/bin/pip
+PIP    := $(PYTHON) -m pip
 
 # ── Setup ────────────────────────────────────────────────────────────────────
 
