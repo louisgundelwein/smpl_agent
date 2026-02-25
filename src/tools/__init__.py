@@ -7,6 +7,7 @@ from src.tools.calendar import CalendarTool
 from src.tools.codex import CodexTool
 from src.tools.email import EmailTool
 from src.tools.github import GitHubTool
+from src.tools.hyperliquid import HyperliquidTool
 from src.tools.memory import MemoryTool
 from src.tools.repos import ReposTool
 from src.tools.scheduler import SchedulerTool
@@ -21,6 +22,7 @@ __all__ = [
     "CodexTool",
     "EmailTool",
     "GitHubTool",
+    "HyperliquidTool",
     "MemoryTool",
     "ReposTool",
     "SchedulerTool",
