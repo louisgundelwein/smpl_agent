@@ -107,6 +107,7 @@ def create_agent(
     calendar_store: CalendarConnectionStore | None = None,
     email_store: EmailAccountStore | None = None,
     hyperliquid_store: HyperliquidStore | None = None,
+    memory_store: MemoryStore | None = None,
 ) -> Agent:
     """Wire up all components and return a configured Agent."""
     llm = LLMClient(
@@ -115,18 +116,18 @@ def create_agent(
         base_url=config.openai_base_url,
     )
 
-    embedding_client = EmbeddingClient(
-        api_key=config.openai_api_key,
-        model=config.embedding_model,
-        base_url=config.openai_base_url,
-        dimensions=config.embedding_dimensions,
-    )
-
-    memory_store = MemoryStore(
-        db=db,
-        embedding_client=embedding_client,
-        dimensions=config.embedding_dimensions,
-    )
+    if memory_store is None:
+        embedding_client = EmbeddingClient(
+            api_key=config.openai_api_key,
+            model=config.embedding_model,
+            base_url=config.openai_base_url,
+            dimensions=config.embedding_dimensions,
+        )
+        memory_store = MemoryStore(
+            db=db,
+            embedding_client=embedding_client,
+            dimensions=config.embedding_dimensions,
+        )
 
     registry = ToolRegistry()
     registry.register(BraveSearchTool(api_key=config.brave_search_api_key))
@@ -309,6 +310,19 @@ def serve(config: Config) -> None:
     # Load static scheduled tasks from config
     _load_static_tasks(scheduler_store, config.scheduler_tasks)
 
+    # Create memory store here so it can be shared with TelegramBot for /status.
+    embedding_client = EmbeddingClient(
+        api_key=config.openai_api_key,
+        model=config.embedding_model,
+        base_url=config.openai_base_url,
+        dimensions=config.embedding_dimensions,
+    )
+    memory_store = MemoryStore(
+        db=db,
+        embedding_client=embedding_client,
+        dimensions=config.embedding_dimensions,
+    )
+
     agent = create_agent(
         config,
         db=db,
@@ -317,6 +331,7 @@ def serve(config: Config) -> None:
         calendar_store=calendar_store,
         email_store=email_store,
         hyperliquid_store=hyperliquid_store,
+        memory_store=memory_store,
     )
     agent.emitter.on(_print_event)
 
@@ -328,9 +343,13 @@ def serve(config: Config) -> None:
             token=config.telegram_bot_token,
             allowed_chat_ids=config.telegram_allowed_chat_ids,
             transcriber=transcriber,
+            memory_store=memory_store,
+            scheduler_store=scheduler_store,
+            subagent_manager=agent._subagent_manager,
         )
         try:
             bot_name = telegram_bot.verify()
+            telegram_bot._register_commands()
             print(f"Telegram bot verified: @{bot_name}")
             telegram_send = telegram_bot.send_message
         except Exception as exc:

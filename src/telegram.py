@@ -24,6 +24,9 @@ class TelegramBot:
         token: str,
         allowed_chat_ids: list[int] | None = None,
         transcriber: Any = None,
+        memory_store: Any = None,
+        scheduler_store: Any = None,
+        subagent_manager: Any = None,
     ) -> None:
         self._token = token
         self._allowed_chat_ids = set(allowed_chat_ids) if allowed_chat_ids else set()
@@ -32,7 +35,13 @@ class TelegramBot:
         self._offset = 0
         self._bot_name: str | None = None
         self._transcriber = transcriber
+        self._memory_store = memory_store
+        self._scheduler_store = scheduler_store
+        self._subagent_manager = subagent_manager
         self._stop_event = threading.Event()
+        # Set by poll_loop() at start; used by command handlers.
+        self._agent: Any = None
+        self._agent_lock: threading.Lock | None = None
 
     def verify(self) -> str:
         """Call getMe to verify the token works. Returns the bot username.
@@ -221,6 +230,93 @@ class TelegramBot:
         self.send_message(chat_id, response, reply_to_message_id=msg_id)
         print(f"  [telegram] replied to chat {chat_id}")
 
+    # ---- Slash command handling ----
+
+    def _handle_command(self, text: str, chat_id: int, msg_id: int | None) -> None:
+        """Dispatch a Telegram slash command (runs outside the agent loop)."""
+        command = text.split()[0].lower()
+        # Strip @botname suffix for group chats (e.g. /new@mybot)
+        if "@" in command:
+            command = command.split("@")[0]
+
+        if command == "/new":
+            self._cmd_new(chat_id, msg_id)
+        elif command == "/status":
+            self._cmd_status(chat_id, msg_id)
+        elif command == "/help":
+            self._cmd_help(chat_id, msg_id)
+        else:
+            self.send_message(
+                chat_id,
+                f"Unknown command: {command}\nType /help for available commands.",
+                reply_to_message_id=msg_id,
+            )
+
+    def _cmd_new(self, chat_id: int, msg_id: int | None) -> None:
+        """Clear conversation history and start fresh."""
+        if not self._agent_lock or not self._agent_lock.acquire(timeout=10):
+            self.send_message(chat_id, "Agent is busy, try again shortly.", reply_to_message_id=msg_id)
+            return
+        try:
+            self._agent.reset()
+        finally:
+            self._agent_lock.release()
+        self.send_message(chat_id, "Conversation cleared.", reply_to_message_id=msg_id)
+
+    def _cmd_status(self, chat_id: int, msg_id: int | None) -> None:
+        """Show system status: context size, memories, tasks, subagents."""
+        lines = ["Status:"]
+
+        if self._agent:
+            msg_count = len(self._agent.messages) - 1  # exclude system prompt
+            lines.append(f"  Messages in context: {msg_count}")
+
+        if self._memory_store:
+            try:
+                lines.append(f"  Memories stored: {self._memory_store.count()}")
+            except Exception:
+                lines.append("  Memories: (unavailable)")
+
+        if self._scheduler_store:
+            try:
+                lines.append(f"  Scheduled tasks: {self._scheduler_store.count()}")
+            except Exception:
+                lines.append("  Scheduled tasks: (unavailable)")
+
+        if self._subagent_manager:
+            try:
+                lines.append(f"  Active subagents: {self._subagent_manager.active_count()}")
+            except Exception:
+                lines.append("  Active subagents: (unavailable)")
+
+        self.send_message(chat_id, "\n".join(lines), reply_to_message_id=msg_id)
+
+    def _cmd_help(self, chat_id: int, msg_id: int | None) -> None:
+        """Send the list of available slash commands."""
+        text = (
+            "Available commands:\n"
+            "/new — Clear conversation and start fresh\n"
+            "/status — Show system status\n"
+            "/help — Show this message"
+        )
+        self.send_message(chat_id, text, reply_to_message_id=msg_id)
+
+    def _register_commands(self) -> None:
+        """Register slash commands with Telegram for UI autocomplete."""
+        commands = [
+            {"command": "new", "description": "Clear conversation and start fresh"},
+            {"command": "status", "description": "Show system status"},
+            {"command": "help", "description": "Show available commands"},
+        ]
+        try:
+            httpx.post(
+                f"{self._base_url}/setMyCommands",
+                json={"commands": commands},
+                timeout=10.0,
+            )
+        except Exception as exc:
+            logger.warning("Failed to register Telegram commands: %s", exc)
+
     def poll_loop(self, agent: Any, agent_lock: threading.Lock) -> None:
         """Long-polling loop — runs in a daemon thread.
 
@@ -228,6 +324,9 @@ class TelegramBot:
             agent: The Agent instance to forward messages to.
             agent_lock: Lock to serialize agent.run() calls.
         """
+        self._agent = agent
+        self._agent_lock = agent_lock
+
         logger.info("Telegram polling started.")
         consecutive_errors = 0
 
@@ -263,6 +362,11 @@ class TelegramBot:
                         continue
 
                     print(f"  [telegram] message from chat {chat_id}: {text[:80]}")
+
+                    if text.startswith("/"):
+                        self._handle_command(text, chat_id, message.get("message_id"))
+                        continue
+
                     self._send_typing(chat_id)
 
                     reply_context = self._extract_reply_context(message)

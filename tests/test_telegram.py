@@ -556,3 +556,165 @@ def test_send_message_logs_error(capsys):
     captured = capsys.readouterr()
     assert "sendMessage failed" in captured.out
     assert "400" in captured.out
+
+
+# --- Slash command tests ---
+
+
+@respx.mock
+def test_cmd_new_resets_agent():
+    """/new calls agent.reset() and sends confirmation."""
+    bot = TelegramBot(token=TOKEN)
+    agent = MagicMock()
+    lock = threading.Lock()
+
+    send_route = respx.post(f"{BASE}/sendMessage").mock(
+        return_value=httpx.Response(200, json={"ok": True})
+    )
+
+    updates = {"ok": True, "result": [_make_update(100, 42, "/new")]}
+    _run_one_poll(bot, agent, lock, updates)
+
+    agent.reset.assert_called_once()
+    agent.run.assert_not_called()
+    assert send_route.called
+    payload = json.loads(send_route.calls[0].request.content)
+    assert "cleared" in payload["text"].lower()
+
+
+@respx.mock
+def test_cmd_help_returns_command_list():
+    """/help lists all available commands."""
+    bot = TelegramBot(token=TOKEN)
+    agent = MagicMock()
+    lock = threading.Lock()
+
+    send_route = respx.post(f"{BASE}/sendMessage").mock(
+        return_value=httpx.Response(200, json={"ok": True})
+    )
+
+    updates = {"ok": True, "result": [_make_update(100, 42, "/help")]}
+    _run_one_poll(bot, agent, lock, updates)
+
+    agent.run.assert_not_called()
+    assert send_route.called
+    text = json.loads(send_route.calls[0].request.content)["text"]
+    assert "/new" in text
+    assert "/status" in text
+    assert "/help" in text
+
+
+@respx.mock
+def test_cmd_status_shows_counts():
+    """/status displays counts from memory, scheduler, and subagents."""
+    memory_store = MagicMock()
+    memory_store.count.return_value = 42
+    scheduler_store = MagicMock()
+    scheduler_store.count.return_value = 3
+    subagent_manager = MagicMock()
+    subagent_manager.active_count.return_value = 1
+
+    agent = MagicMock()
+    agent.messages = [{"role": "system"}, {"role": "user"}, {"role": "assistant"}]
+
+    bot = TelegramBot(
+        token=TOKEN,
+        memory_store=memory_store,
+        scheduler_store=scheduler_store,
+        subagent_manager=subagent_manager,
+    )
+    lock = threading.Lock()
+
+    send_route = respx.post(f"{BASE}/sendMessage").mock(
+        return_value=httpx.Response(200, json={"ok": True})
+    )
+
+    updates = {"ok": True, "result": [_make_update(100, 42, "/status")]}
+    _run_one_poll(bot, agent, lock, updates)
+
+    agent.run.assert_not_called()
+    text = json.loads(send_route.calls[0].request.content)["text"]
+    assert "2" in text  # 3 messages - 1 system = 2
+    assert "42" in text  # memory count
+    assert "3" in text  # scheduler count
+    assert "1" in text  # active subagents
+
+
+@respx.mock
+def test_cmd_status_without_stores():
+    """/status works gracefully when no stores are configured."""
+    bot = TelegramBot(token=TOKEN)
+    agent = MagicMock()
+    agent.messages = [{"role": "system"}]
+    lock = threading.Lock()
+
+    send_route = respx.post(f"{BASE}/sendMessage").mock(
+        return_value=httpx.Response(200, json={"ok": True})
+    )
+
+    updates = {"ok": True, "result": [_make_update(100, 42, "/status")]}
+    _run_one_poll(bot, agent, lock, updates)
+
+    text = json.loads(send_route.calls[0].request.content)["text"]
+    assert "Status:" in text
+    assert "Messages in context: 0" in text
+
+
+@respx.mock
+def test_unknown_command_shows_error():
+    """Unknown commands get an error message mentioning /help."""
+    bot = TelegramBot(token=TOKEN)
+    agent = MagicMock()
+    lock = threading.Lock()
+
+    send_route = respx.post(f"{BASE}/sendMessage").mock(
+        return_value=httpx.Response(200, json={"ok": True})
+    )
+
+    updates = {"ok": True, "result": [_make_update(100, 42, "/foo")]}
+    _run_one_poll(bot, agent, lock, updates)
+
+    agent.run.assert_not_called()
+    text = json.loads(send_route.calls[0].request.content)["text"]
+    assert "/foo" in text
+    assert "/help" in text
+
+
+@respx.mock
+def test_command_with_bot_mention():
+    """/new@mybot triggers the /new command (group chat format)."""
+    bot = TelegramBot(token=TOKEN)
+    agent = MagicMock()
+    lock = threading.Lock()
+
+    send_route = respx.post(f"{BASE}/sendMessage").mock(
+        return_value=httpx.Response(200, json={"ok": True})
+    )
+
+    updates = {"ok": True, "result": [_make_update(100, 42, "/new@mybot")]}
+    _run_one_poll(bot, agent, lock, updates)
+
+    agent.reset.assert_called_once()
+    agent.run.assert_not_called()
+    payload = json.loads(send_route.calls[0].request.content)
+    assert "cleared" in payload["text"].lower()
+
+
+@respx.mock
+def test_command_does_not_send_typing():
+    """Slash commands skip the typing indicator (they respond instantly)."""
+    bot = TelegramBot(token=TOKEN)
+    agent = MagicMock()
+    lock = threading.Lock()
+
+    respx.post(f"{BASE}/sendMessage").mock(
+        return_value=httpx.Response(200, json={"ok": True})
+    )
+    typing_route = respx.post(f"{BASE}/sendChatAction").mock(
+        return_value=httpx.Response(200, json={"ok": True})
+    )
+
+    updates = {"ok": True, "result": [_make_update(100, 42, "/help")]}
+    _run_one_poll(bot, agent, lock, updates)
+
+    assert not typing_route.called
