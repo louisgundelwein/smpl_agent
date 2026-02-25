@@ -19,7 +19,8 @@ class Config:
     telegram_bot_token: str | None
     telegram_allowed_chat_ids: list[int]
     embedding_model: str
-    memory_db_path: str
+    embedding_dimensions: int
+    database_url: str
     soul_path: str
     shell_command_timeout: int
     shell_max_output: int
@@ -33,12 +34,8 @@ class Config:
     max_tool_rounds: int
     daemon_pid_path: str
     daemon_log_path: str
-    scheduler_db_path: str
     scheduler_poll_interval: int
     scheduler_tasks: str
-    repos_db_path: str
-    calendar_db_path: str
-    email_db_path: str
     max_subagents: int
     subagent_tool_rounds: int
 
@@ -65,7 +62,8 @@ class Config:
         ]
 
         embedding_model = os.getenv("EMBEDDING_MODEL", "text-embedding-3-large")
-        memory_db_path = os.getenv("MEMORY_DB_PATH", "agent_memory.db")
+        embedding_dimensions = int(os.getenv("EMBEDDING_DIMENSIONS", "3072"))
+        database_url = os.getenv("DATABASE_URL", "")
         soul_path = os.getenv("SOUL_PATH", "SOUL.md")
         shell_command_timeout = int(os.getenv("SHELL_COMMAND_TIMEOUT", "30"))
         shell_max_output = int(os.getenv("SHELL_MAX_OUTPUT", "50000"))
@@ -79,12 +77,8 @@ class Config:
         max_tool_rounds = int(os.getenv("MAX_TOOL_ROUNDS", "25"))
         daemon_pid_path = os.getenv("DAEMON_PID_PATH", "agent.pid")
         daemon_log_path = os.getenv("DAEMON_LOG_PATH", "agent.log")
-        scheduler_db_path = os.getenv("SCHEDULER_DB_PATH", "scheduler.db")
         scheduler_poll_interval = int(os.getenv("SCHEDULER_POLL_INTERVAL", "30"))
         scheduler_tasks = os.getenv("SCHEDULER_TASKS", "")
-        repos_db_path = os.getenv("REPOS_DB_PATH", "repos.db")
-        calendar_db_path = os.getenv("CALENDAR_DB_PATH", "calendar.db")
-        email_db_path = os.getenv("EMAIL_DB_PATH", "email.db")
         max_subagents = int(os.getenv("MAX_SUBAGENTS", "10"))
         subagent_tool_rounds = int(os.getenv("SUBAGENT_TOOL_ROUNDS", "15"))
 
@@ -92,6 +86,8 @@ class Config:
             raise ValueError("OPENAI_API_KEY is required")
         if not brave_key:
             raise ValueError("BRAVE_SEARCH_API_KEY is required")
+        if not database_url:
+            raise ValueError("DATABASE_URL is required")
 
         return cls(
             openai_api_key=openai_key,
@@ -103,7 +99,8 @@ class Config:
             telegram_bot_token=telegram_token,
             telegram_allowed_chat_ids=telegram_chat_ids,
             embedding_model=embedding_model,
-            memory_db_path=memory_db_path,
+            embedding_dimensions=embedding_dimensions,
+            database_url=database_url,
             soul_path=soul_path,
             shell_command_timeout=shell_command_timeout,
             shell_max_output=shell_max_output,
@@ -117,12 +114,8 @@ class Config:
             max_tool_rounds=max_tool_rounds,
             daemon_pid_path=daemon_pid_path,
             daemon_log_path=daemon_log_path,
-            scheduler_db_path=scheduler_db_path,
             scheduler_poll_interval=scheduler_poll_interval,
             scheduler_tasks=scheduler_tasks,
-            repos_db_path=repos_db_path,
-            calendar_db_path=calendar_db_path,
-            email_db_path=email_db_path,
             max_subagents=max_subagents,
             subagent_tool_rounds=subagent_tool_rounds,
         )

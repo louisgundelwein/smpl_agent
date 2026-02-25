@@ -1,39 +1,43 @@
-"""Repository registry with SQLite persistence."""
+"""Repository registry with Postgres persistence."""
 
-import sqlite3
 from datetime import datetime, timezone
 from typing import Any
 
+from src.db import Database
+
 
 class RepoStore:
-    """Persistent repository registry using SQLite.
+    """Persistent repository registry using Postgres.
 
     Stores known repositories with their GitHub owner, name, URL,
     and metadata. Used by the agent to track which repos it manages.
     """
 
-    def __init__(self, db_path: str) -> None:
-        self._conn = sqlite3.connect(db_path, check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA journal_mode=WAL")
+    def __init__(self, db: Database) -> None:
+        self._db = db
         self._init_schema()
 
     def _init_schema(self) -> None:
         """Create the repos table if it doesn't exist."""
-        self._conn.execute("""
-            CREATE TABLE IF NOT EXISTS repos (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL UNIQUE,
-                owner TEXT NOT NULL,
-                repo TEXT NOT NULL,
-                url TEXT NOT NULL,
-                default_branch TEXT NOT NULL DEFAULT 'main',
-                description TEXT NOT NULL DEFAULT '',
-                tags TEXT NOT NULL DEFAULT '',
-                added_at TEXT NOT NULL
-            )
-        """)
-        self._conn.commit()
+        conn = self._db.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS repos (
+                        id SERIAL PRIMARY KEY,
+                        name TEXT NOT NULL UNIQUE,
+                        owner TEXT NOT NULL,
+                        repo TEXT NOT NULL,
+                        url TEXT NOT NULL,
+                        default_branch TEXT NOT NULL DEFAULT 'main',
+                        description TEXT NOT NULL DEFAULT '',
+                        tags TEXT NOT NULL DEFAULT '',
+                        added_at TEXT NOT NULL
+                    )
+                """)
+            conn.commit()
+        finally:
+            self._db.put_connection(conn)
 
     def add(
         self,
@@ -60,34 +64,55 @@ class RepoStore:
             The ID of the stored repo.
 
         Raises:
-            sqlite3.IntegrityError: If name already exists.
+            psycopg2.errors.UniqueViolation: If name already exists.
         """
         tags_str = ",".join(tags) if tags else ""
         now = datetime.now(timezone.utc).isoformat()
-        cursor = self._conn.execute(
-            """INSERT INTO repos (name, owner, repo, url, default_branch, description, tags, added_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (name, owner, repo, url, default_branch, description, tags_str, now),
-        )
-        self._conn.commit()
-        return cursor.lastrowid
+        conn = self._db.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """INSERT INTO repos (name, owner, repo, url, default_branch, description, tags, added_at)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+                    (name, owner, repo, url, default_branch, description, tags_str, now),
+                )
+                row = cur.fetchone()
+            conn.commit()
+            return row["id"]
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            self._db.put_connection(conn)
 
     def list_all(self) -> list[dict[str, Any]]:
         """Return all registered repositories."""
-        rows = self._conn.execute(
-            "SELECT id, name, owner, repo, url, default_branch, description, tags, added_at "
-            "FROM repos ORDER BY name"
-        ).fetchall()
-        return [self._row_to_dict(row) for row in rows]
+        conn = self._db.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id, name, owner, repo, url, default_branch, description, tags, added_at "
+                    "FROM repos ORDER BY name"
+                )
+                rows = cur.fetchall()
+            return [self._row_to_dict(row) for row in rows]
+        finally:
+            self._db.put_connection(conn)
 
     def get(self, name: str) -> dict[str, Any] | None:
         """Get a repository by short name. Returns None if not found."""
-        row = self._conn.execute(
-            "SELECT id, name, owner, repo, url, default_branch, description, tags, added_at "
-            "FROM repos WHERE name = ?",
-            (name,),
-        ).fetchone()
-        return self._row_to_dict(row) if row else None
+        conn = self._db.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id, name, owner, repo, url, default_branch, description, tags, added_at "
+                    "FROM repos WHERE name = %s",
+                    (name,),
+                )
+                row = cur.fetchone()
+            return self._row_to_dict(row) if row else None
+        finally:
+            self._db.put_connection(conn)
 
     def remove(self, name: str) -> bool:
         """Remove a repository by name.
@@ -95,9 +120,15 @@ class RepoStore:
         Returns:
             True if a repo was removed, False if name not found.
         """
-        cursor = self._conn.execute("DELETE FROM repos WHERE name = ?", (name,))
-        self._conn.commit()
-        return cursor.rowcount > 0
+        conn = self._db.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM repos WHERE name = %s", (name,))
+                removed = cur.rowcount > 0
+            conn.commit()
+            return removed
+        finally:
+            self._db.put_connection(conn)
 
     def update(self, name: str, **fields: Any) -> bool:
         """Update repo fields (description, default_branch, tags).
@@ -117,26 +148,37 @@ class RepoStore:
         if not updates:
             return False
 
-        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        set_clause = ", ".join(f"{k} = %s" for k in updates)
         values = list(updates.values()) + [name]
-        cursor = self._conn.execute(
-            f"UPDATE repos SET {set_clause} WHERE name = ?",
-            values,
-        )
-        self._conn.commit()
-        return cursor.rowcount > 0
+        conn = self._db.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"UPDATE repos SET {set_clause} WHERE name = %s",
+                    values,
+                )
+                updated = cur.rowcount > 0
+            conn.commit()
+            return updated
+        finally:
+            self._db.put_connection(conn)
 
     def count(self) -> int:
         """Return the total number of registered repos."""
-        row = self._conn.execute("SELECT COUNT(*) FROM repos").fetchone()
-        return row[0]
+        conn = self._db.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) AS cnt FROM repos")
+                row = cur.fetchone()
+            return row["cnt"]
+        finally:
+            self._db.put_connection(conn)
 
     def close(self) -> None:
-        """Close the database connection."""
-        self._conn.close()
+        """No-op — connection pool is managed by Database."""
 
     @staticmethod
-    def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
+    def _row_to_dict(row: dict) -> dict[str, Any]:
         """Convert a database row to a dict with parsed tags."""
         return {
             "id": row["id"],

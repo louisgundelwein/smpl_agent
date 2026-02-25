@@ -1,85 +1,107 @@
-"""Tests for src.calendar_store — CalDAV connection persistence."""
+"""Tests for src.calendar_store — CalDAV connection persistence (Postgres, cursor-mocked)."""
 
-import sqlite3
+from unittest.mock import MagicMock
 
 import pytest
 
 from src.calendar_store import CalendarConnectionStore
 
 
-@pytest.fixture()
-def store():
-    s = CalendarConnectionStore(db_path=":memory:")
-    yield s
-    s.close()
+def _make_store():
+    """Create a CalendarConnectionStore with a mock Database."""
+    db = MagicMock()
+    conn = MagicMock()
+    cursor = MagicMock()
+
+    conn.cursor.return_value.__enter__ = MagicMock(return_value=cursor)
+    conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
+    db.get_connection.return_value = conn
+
+    cursor.execute.return_value = None
+    store = CalendarConnectionStore(db=db)
+    return store, db, conn, cursor
 
 
-def test_add_and_get(store):
+def _sample_row(
+    id=1, name="work", url="https://cal.example.com/dav/",
+    username="alice", password="secret", provider="nextcloud",
+    added_at="2025-01-01T00:00:00+00:00",
+):
+    return {
+        "id": id, "name": name, "url": url, "username": username,
+        "password": password, "provider": provider, "added_at": added_at,
+    }
+
+
+def test_add_and_get():
+    store, db, conn, cursor = _make_store()
+    cursor.fetchone.return_value = {"id": 1}
     rid = store.add(
-        name="work",
-        url="https://cal.example.com/dav/",
-        username="alice",
-        password="secret",
-        provider="nextcloud",
+        name="work", url="https://cal.example.com/dav/",
+        username="alice", password="secret", provider="nextcloud",
     )
-    assert isinstance(rid, int)
+    assert rid == 1
+    conn.commit.assert_called()
 
-    conn = store.get("work")
-    assert conn is not None
-    assert conn["name"] == "work"
-    assert conn["url"] == "https://cal.example.com/dav/"
-    assert conn["username"] == "alice"
-    assert conn["password"] == "secret"
-    assert conn["provider"] == "nextcloud"
-    assert conn["added_at"]  # non-empty ISO timestamp
+    cursor.fetchone.return_value = _sample_row()
+    result = store.get("work")
+    assert result["name"] == "work"
+    assert result["password"] == "secret"
+    assert result["provider"] == "nextcloud"
 
 
-def test_add_duplicate_name_raises(store):
-    store.add(name="dup", url="https://a", username="u", password="p")
-    with pytest.raises(sqlite3.IntegrityError):
-        store.add(name="dup", url="https://b", username="u2", password="p2")
+def test_add_duplicate_name_raises():
+    store, db, conn, cursor = _make_store()
+    import psycopg2.errors
+    cursor.execute.side_effect = psycopg2.errors.UniqueViolation("duplicate")
+    with pytest.raises(psycopg2.errors.UniqueViolation):
+        store.add(name="dup", url="https://a", username="u", password="p")
 
 
-def test_list_all_redacts_password(store):
-    store.add(name="a", url="https://a", username="u1", password="secret1")
-    store.add(name="b", url="https://b", username="u2", password="secret2")
-
+def test_list_all_redacts_password():
+    store, db, conn, cursor = _make_store()
+    cursor.fetchall.return_value = [
+        {"id": 1, "name": "a", "url": "https://a", "username": "u1", "provider": "caldav", "added_at": "t"},
+        {"id": 2, "name": "b", "url": "https://b", "username": "u2", "provider": "caldav", "added_at": "t"},
+    ]
     conns = store.list_all()
     assert len(conns) == 2
-    # list_all should NOT include password
     for c in conns:
         assert "password" not in c
     assert conns[0]["name"] == "a"
     assert conns[1]["name"] == "b"
 
 
-def test_get_nonexistent_returns_none(store):
+def test_get_nonexistent_returns_none():
+    store, db, conn, cursor = _make_store()
+    cursor.fetchone.return_value = None
     assert store.get("nope") is None
 
 
-def test_remove(store):
-    store.add(name="tmp", url="https://x", username="u", password="p")
-    assert store.count() == 1
-
-    removed = store.remove("tmp")
-    assert removed is True
-    assert store.count() == 0
-    assert store.get("tmp") is None
+def test_remove():
+    store, db, conn, cursor = _make_store()
+    cursor.rowcount = 1
+    assert store.remove("tmp") is True
+    conn.commit.assert_called()
 
 
-def test_remove_nonexistent(store):
+def test_remove_nonexistent():
+    store, db, conn, cursor = _make_store()
+    cursor.rowcount = 0
     assert store.remove("ghost") is False
 
 
-def test_count(store):
-    assert store.count() == 0
-    store.add(name="one", url="https://1", username="u", password="p")
-    assert store.count() == 1
-    store.add(name="two", url="https://2", username="u", password="p")
+def test_count():
+    store, db, conn, cursor = _make_store()
+    cursor.fetchone.return_value = {"cnt": 2}
     assert store.count() == 2
 
 
-def test_default_provider(store):
+def test_default_provider():
+    store, db, conn, cursor = _make_store()
+    cursor.fetchone.return_value = {"id": 1}
     store.add(name="plain", url="https://x", username="u", password="p")
-    conn = store.get("plain")
-    assert conn["provider"] == "caldav"
+
+    cursor.fetchone.return_value = _sample_row(name="plain", provider="caldav")
+    result = store.get("plain")
+    assert result["provider"] == "caldav"

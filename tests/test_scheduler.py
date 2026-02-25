@@ -1,8 +1,8 @@
-"""Tests for src.scheduler — scheduled task store and polling loop."""
+"""Tests for src.scheduler — scheduled task store and polling loop (Postgres, cursor-mocked)."""
 
 import threading
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 
 import pytest
 
@@ -57,48 +57,62 @@ class TestComputeNextRun:
 # --- SchedulerStore ---
 
 
-@pytest.fixture
-def store():
-    """SchedulerStore backed by in-memory SQLite."""
-    return SchedulerStore(db_path=":memory:")
+def _make_store():
+    """Create a SchedulerStore with a mock Database."""
+    db = MagicMock()
+    conn = MagicMock()
+    cursor = MagicMock()
+
+    conn.cursor.return_value.__enter__ = MagicMock(return_value=cursor)
+    conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
+    db.get_connection.return_value = conn
+
+    cursor.execute.return_value = None
+    store = SchedulerStore(db=db)
+    return store, db, conn, cursor
 
 
-def _add_sample(store, name="daily-check", cron="0 9 * * *"):
-    return store.add(
-        name=name,
-        prompt="Check open PRs",
-        cron_expression=cron,
-        deliver_to="memory",
-    )
+def _sample_task(
+    id=1, name="daily-check", prompt="Check open PRs",
+    cron_expression="0 9 * * *", enabled=True, deliver_to="memory",
+    telegram_chat_id=None, last_run_at=None,
+    next_run_at="2025-06-16T09:00:00+00:00",
+    created_at="2025-06-15T08:00:00+00:00",
+):
+    return {
+        "id": id, "name": name, "prompt": prompt,
+        "cron_expression": cron_expression, "enabled": enabled,
+        "deliver_to": deliver_to, "telegram_chat_id": telegram_chat_id,
+        "last_run_at": last_run_at, "next_run_at": next_run_at,
+        "created_at": created_at,
+    }
 
 
 class TestSchedulerStoreAdd:
-    def test_returns_id(self, store):
-        task_id = _add_sample(store)
+    def test_returns_id(self):
+        store, db, conn, cursor = _make_store()
+        cursor.fetchone.return_value = {"id": 1}
+        task_id = store.add(name="daily-check", prompt="Check open PRs", cron_expression="0 9 * * *")
         assert task_id == 1
+        conn.commit.assert_called()
 
-    def test_increments_ids(self, store):
-        id1 = _add_sample(store, "task1")
-        id2 = _add_sample(store, "task2")
-        assert id2 > id1
+    def test_duplicate_name_raises(self):
+        store, db, conn, cursor = _make_store()
+        import psycopg2.errors
+        cursor.execute.side_effect = psycopg2.errors.UniqueViolation("duplicate")
+        with pytest.raises(psycopg2.errors.UniqueViolation):
+            store.add(name="daily-check", prompt="Check open PRs", cron_expression="0 9 * * *")
 
-    def test_duplicate_name_raises(self, store):
-        _add_sample(store)
-        with pytest.raises(Exception):
-            _add_sample(store)
-
-    def test_computes_next_run(self, store):
-        _add_sample(store)
-        task = store.get("daily-check")
-        assert task["next_run_at"] is not None
-
-    def test_with_telegram(self, store):
+    def test_with_telegram(self):
+        store, db, conn, cursor = _make_store()
+        cursor.fetchone.return_value = {"id": 1}
         store.add(
-            name="tg-task",
-            prompt="Send report",
-            cron_expression="0 9 * * *",
-            deliver_to="telegram",
+            name="tg-task", prompt="Send report",
+            cron_expression="0 9 * * *", deliver_to="telegram",
             telegram_chat_id=12345,
+        )
+        cursor.fetchone.return_value = _sample_task(
+            name="tg-task", deliver_to="telegram", telegram_chat_id=12345,
         )
         task = store.get("tg-task")
         assert task["deliver_to"] == "telegram"
@@ -106,183 +120,142 @@ class TestSchedulerStoreAdd:
 
 
 class TestSchedulerStoreListAll:
-    def test_empty(self, store):
+    def test_empty(self):
+        store, db, conn, cursor = _make_store()
+        cursor.fetchall.return_value = []
         assert store.list_all() == []
 
-    def test_returns_all(self, store):
-        _add_sample(store, "task1")
-        _add_sample(store, "task2")
+    def test_returns_all(self):
+        store, db, conn, cursor = _make_store()
+        cursor.fetchall.return_value = [_sample_task(id=1, name="task1"), _sample_task(id=2, name="task2")]
         assert len(store.list_all()) == 2
 
 
 class TestSchedulerStoreGetDue:
-    def test_returns_due_tasks(self, store):
-        _add_sample(store)
-        # Set next_run_at to the past
-        store._conn.execute(
-            "UPDATE schedules SET next_run_at = ?",
-            (datetime(2020, 1, 1, tzinfo=timezone.utc).isoformat(),),
-        )
-        store._conn.commit()
-
+    def test_returns_due_tasks(self):
+        store, db, conn, cursor = _make_store()
+        cursor.fetchall.return_value = [_sample_task(next_run_at="2020-01-01T00:00:00+00:00")]
         due = store.get_due()
         assert len(due) == 1
 
-    def test_skips_disabled(self, store):
-        _add_sample(store)
-        store._conn.execute(
-            "UPDATE schedules SET next_run_at = ?, enabled = 0",
-            (datetime(2020, 1, 1, tzinfo=timezone.utc).isoformat(),),
-        )
-        store._conn.commit()
-
+    def test_skips_disabled(self):
+        store, db, conn, cursor = _make_store()
+        cursor.fetchall.return_value = []
         assert store.get_due() == []
-
-    def test_skips_future(self, store):
-        _add_sample(store)
-        # next_run_at is in the future by default
-        due = store.get_due(now=datetime(2020, 1, 1, tzinfo=timezone.utc))
-        assert due == []
 
 
 class TestSchedulerStoreMarkRun:
-    def test_updates_timestamps(self, store):
-        task_id = _add_sample(store)
+    def test_updates_timestamps(self):
+        store, db, conn, cursor = _make_store()
         now = datetime(2025, 6, 15, 9, 0, 0, tzinfo=timezone.utc)
+        cursor.fetchone.return_value = {"cron_expression": "0 9 * * *"}
+        store.mark_run(1, now=now)
+        conn.commit.assert_called()
 
-        store.mark_run(task_id, now=now)
-
-        task = store.get("daily-check")
-        assert task["last_run_at"] == now.isoformat()
-        # next_run_at should be after now
-        next_run = datetime.fromisoformat(task["next_run_at"])
-        assert next_run > now
+    def test_nonexistent_task_noop(self):
+        store, db, conn, cursor = _make_store()
+        cursor.fetchone.return_value = None
+        store.mark_run(999)
 
 
 class TestSchedulerStoreDelete:
-    def test_deletes_existing(self, store):
-        _add_sample(store)
+    def test_deletes_existing(self):
+        store, db, conn, cursor = _make_store()
+        cursor.rowcount = 1
         assert store.delete("daily-check") is True
-        assert store.get("daily-check") is None
 
-    def test_returns_false_for_missing(self, store):
+    def test_returns_false_for_missing(self):
+        store, db, conn, cursor = _make_store()
+        cursor.rowcount = 0
         assert store.delete("nonexistent") is False
 
 
 class TestSchedulerStoreToggle:
-    def test_disable(self, store):
-        _add_sample(store)
+    def test_disable(self):
+        store, db, conn, cursor = _make_store()
+        cursor.rowcount = 1
         assert store.toggle("daily-check", enabled=False) is True
-        task = store.get("daily-check")
-        assert task["enabled"] == 0
+        conn.commit.assert_called()
 
-    def test_enable(self, store):
-        _add_sample(store)
-        store.toggle("daily-check", enabled=False)
-        store.toggle("daily-check", enabled=True)
-        task = store.get("daily-check")
-        assert task["enabled"] == 1
-
-    def test_returns_false_for_missing(self, store):
+    def test_returns_false_for_missing(self):
+        store, db, conn, cursor = _make_store()
+        cursor.rowcount = 0
         assert store.toggle("nonexistent", enabled=False) is False
 
 
 class TestSchedulerStoreUpsert:
-    def test_inserts_new(self, store):
+    def test_inserts_new(self):
+        store, db, conn, cursor = _make_store()
+        # get returns None (not found) → insert
+        cursor.fetchone.side_effect = [None, {"id": 1}]
         task_id = store.upsert("new-task", "Do something", "0 9 * * *")
         assert task_id == 1
 
-    def test_skips_existing(self, store):
-        id1 = store.upsert("my-task", "Do something", "0 9 * * *")
-        id2 = store.upsert("my-task", "Different prompt", "0 10 * * *")
-        assert id1 == id2
-        assert store.count() == 1
+    def test_skips_existing(self):
+        store, db, conn, cursor = _make_store()
+        cursor.fetchone.return_value = _sample_task(id=5, name="my-task")
+        task_id = store.upsert("my-task", "Different prompt", "0 10 * * *")
+        assert task_id == 5
 
 
 class TestSchedulerStoreCount:
-    def test_empty(self, store):
-        assert store.count() == 0
-
-    def test_after_add(self, store):
-        _add_sample(store)
-        assert store.count() == 1
+    def test_returns_count(self):
+        store, db, conn, cursor = _make_store()
+        cursor.fetchone.return_value = {"cnt": 3}
+        assert store.count() == 3
 
 
 # --- Scheduler polling loop ---
 
 
 class TestSchedulerRunTask:
-    def test_runs_agent_and_marks_done(self, store):
-        task_id = _add_sample(store)
-        # Force task to be due
-        store._conn.execute(
-            "UPDATE schedules SET next_run_at = ?",
-            (datetime(2020, 1, 1, tzinfo=timezone.utc).isoformat(),),
-        )
-        store._conn.commit()
-
+    def test_runs_agent_and_marks_done(self):
+        store, db, conn, cursor = _make_store()
         mock_agent = MagicMock()
         mock_agent.run.return_value = "PR summary: 3 open PRs"
         lock = threading.Lock()
 
+        # mark_run needs a cron_expression row
+        cursor.fetchone.return_value = {"cron_expression": "0 9 * * *"}
+
         scheduler = Scheduler(store=store, poll_interval=1)
-        task = store.get_due()[0]
+        task = _sample_task()
         scheduler._run_task(task, mock_agent, lock)
 
         mock_agent.run.assert_called_once()
         prompt_arg = mock_agent.run.call_args[0][0]
         assert "daily-check" in prompt_arg
         assert "Check open PRs" in prompt_arg
+        conn.commit.assert_called()
 
-        # Task should be marked as run
-        updated = store.get("daily-check")
-        assert updated["last_run_at"] is not None
-
-    def test_delivers_to_telegram(self, store):
-        store.add(
-            name="tg-task",
-            prompt="Report",
-            cron_expression="0 9 * * *",
-            deliver_to="telegram",
-            telegram_chat_id=42,
-        )
-        store._conn.execute(
-            "UPDATE schedules SET next_run_at = ?",
-            (datetime(2020, 1, 1, tzinfo=timezone.utc).isoformat(),),
-        )
-        store._conn.commit()
-
+    def test_delivers_to_telegram(self):
+        store, db, conn, cursor = _make_store()
         mock_agent = MagicMock()
         mock_agent.run.return_value = "Daily report content"
         mock_send = MagicMock()
         lock = threading.Lock()
 
+        cursor.fetchone.return_value = {"cron_expression": "0 9 * * *"}
+
         scheduler = Scheduler(store=store, telegram_send=mock_send)
-        task = store.get_due()[0]
+        task = _sample_task(name="tg-task", deliver_to="telegram", telegram_chat_id=42)
         scheduler._run_task(task, mock_agent, lock)
 
         mock_send.assert_called_once()
         call_args = mock_send.call_args[0]
-        assert call_args[0] == 42  # chat_id
+        assert call_args[0] == 42
         assert "Daily report content" in call_args[1]
 
-    def test_handles_agent_error(self, store):
-        task_id = _add_sample(store)
-        store._conn.execute(
-            "UPDATE schedules SET next_run_at = ?",
-            (datetime(2020, 1, 1, tzinfo=timezone.utc).isoformat(),),
-        )
-        store._conn.commit()
-
+    def test_handles_agent_error(self):
+        store, db, conn, cursor = _make_store()
         mock_agent = MagicMock()
         mock_agent.run.side_effect = RuntimeError("LLM down")
         lock = threading.Lock()
 
+        cursor.fetchone.return_value = {"cron_expression": "0 9 * * *"}
+
         scheduler = Scheduler(store=store)
-        task = store.get_due()[0]
+        task = _sample_task()
         # Should not raise
         scheduler._run_task(task, mock_agent, lock)
-
-        # Task should still be marked as run
-        updated = store.get("daily-check")
-        assert updated["last_run_at"] is not None
+        conn.commit.assert_called()

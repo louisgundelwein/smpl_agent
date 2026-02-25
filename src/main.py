@@ -9,6 +9,7 @@ from pathlib import Path
 from src.agent import SYSTEM_PROMPT, Agent
 from src.config import Config
 from src.context import ContextManager
+from src.db import Database
 from src.events import AgentEvent, EventEmitter
 from src.formatting import format_event
 from src.history import ConversationHistory
@@ -98,6 +99,7 @@ def _build_repo_context(repo_store: RepoStore) -> str:
 
 def create_agent(
     config: Config,
+    db: Database,
     scheduler_store: SchedulerStore | None = None,
     repo_store: RepoStore | None = None,
     calendar_store: CalendarConnectionStore | None = None,
@@ -117,8 +119,9 @@ def create_agent(
     )
 
     memory_store = MemoryStore(
-        db_path=config.memory_db_path,
+        db=db,
         embedding_client=embedding_client,
+        dimensions=config.embedding_dimensions,
     )
 
     registry = ToolRegistry()
@@ -207,7 +210,7 @@ def create_agent(
     )
 
 
-def repl(agent: Agent) -> None:
+def repl(agent: Agent, db: Database) -> None:
     """Run the direct terminal REPL loop (no server)."""
     agent.emitter.on(_print_event)
 
@@ -235,6 +238,8 @@ def repl(agent: Agent) -> None:
             print(f"\nAgent: {response}\n")
         except Exception as exc:
             print(f"\nError: {exc}\n", file=sys.stderr)
+
+    db.close()
 
 
 def _load_static_tasks(scheduler_store: SchedulerStore, raw: str) -> None:
@@ -276,17 +281,21 @@ def serve(config: Config) -> None:
     from src.telegram import TelegramBot
     from src.transcription import Transcriber
 
+    # Create shared database connection pool
+    db = Database(config.database_url)
+
     # Create persistent stores
-    scheduler_store = SchedulerStore(db_path=config.scheduler_db_path)
-    repo_store = RepoStore(db_path=config.repos_db_path)
-    calendar_store = CalendarConnectionStore(db_path=config.calendar_db_path)
-    email_store = EmailAccountStore(db_path=config.email_db_path)
+    scheduler_store = SchedulerStore(db=db)
+    repo_store = RepoStore(db=db)
+    calendar_store = CalendarConnectionStore(db=db)
+    email_store = EmailAccountStore(db=db)
 
     # Load static scheduled tasks from config
     _load_static_tasks(scheduler_store, config.scheduler_tasks)
 
     agent = create_agent(
         config,
+        db=db,
         scheduler_store=scheduler_store,
         repo_store=repo_store,
         calendar_store=calendar_store,
@@ -309,6 +318,7 @@ def serve(config: Config) -> None:
             telegram_send = telegram_bot._send_message
         except Exception as exc:
             print(f"Telegram bot token invalid: {exc}", file=sys.stderr)
+            db.close()
             sys.exit(1)
 
     scheduler = Scheduler(
@@ -327,10 +337,14 @@ def serve(config: Config) -> None:
 
     if sys.platform != "win32":
         def _handle_sigterm(signum, frame):
+            db.close()
             server.shutdown()
         _signal.signal(_signal.SIGTERM, _handle_sigterm)
 
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    finally:
+        db.close()
 
 
 def attach(config: Config) -> None:
@@ -427,8 +441,9 @@ def main() -> None:
     elif args.command == "status":
         status(config)
     else:
-        agent = create_agent(config)
-        repl(agent)
+        db = Database(config.database_url)
+        agent = create_agent(config, db=db)
+        repl(agent, db)
 
 
 if __name__ == "__main__":

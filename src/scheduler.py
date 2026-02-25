@@ -1,14 +1,15 @@
-"""Scheduled task engine with SQLite persistence and polling loop."""
+"""Scheduled task engine with Postgres persistence and polling loop."""
 
 import json
 import logging
-import sqlite3
 import threading
 import time
 from datetime import datetime, timezone
 from typing import Any, Callable
 
 from croniter import croniter
+
+from src.db import Database
 
 logger = logging.getLogger(__name__)
 
@@ -70,35 +71,37 @@ def compute_next_run(cron_expression: str, after: datetime | None = None) -> dat
 
 
 class SchedulerStore:
-    """Persistent scheduled task storage using SQLite.
+    """Persistent scheduled task storage using Postgres.
 
     Manages creation, listing, and lifecycle of scheduled tasks.
-    Thread-safe via WAL mode.
     """
 
-    def __init__(self, db_path: str) -> None:
-        self._conn = sqlite3.connect(db_path, check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA journal_mode=WAL")
+    def __init__(self, db: Database) -> None:
+        self._db = db
         self._init_schema()
 
     def _init_schema(self) -> None:
         """Create the schedules table if it doesn't exist."""
-        self._conn.execute("""
-            CREATE TABLE IF NOT EXISTS schedules (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL UNIQUE,
-                prompt TEXT NOT NULL,
-                cron_expression TEXT NOT NULL,
-                enabled INTEGER NOT NULL DEFAULT 1,
-                deliver_to TEXT NOT NULL DEFAULT 'memory',
-                telegram_chat_id INTEGER,
-                last_run_at TEXT,
-                next_run_at TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            )
-        """)
-        self._conn.commit()
+        conn = self._db.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS schedules (
+                        id SERIAL PRIMARY KEY,
+                        name TEXT NOT NULL UNIQUE,
+                        prompt TEXT NOT NULL,
+                        cron_expression TEXT NOT NULL,
+                        enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                        deliver_to TEXT NOT NULL DEFAULT 'memory',
+                        telegram_chat_id BIGINT,
+                        last_run_at TEXT,
+                        next_run_at TEXT NOT NULL,
+                        created_at TEXT NOT NULL
+                    )
+                """)
+            conn.commit()
+        finally:
+            self._db.put_connection(conn)
 
     def add(
         self,
@@ -123,22 +126,31 @@ class SchedulerStore:
         now = datetime.now(timezone.utc)
         next_run = compute_next_run(cron_expression, after=now)
 
-        cursor = self._conn.execute(
-            """INSERT INTO schedules
-               (name, prompt, cron_expression, deliver_to, telegram_chat_id, next_run_at, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (
-                name,
-                prompt,
-                cron_expression,
-                deliver_to,
-                telegram_chat_id,
-                next_run.isoformat(),
-                now.isoformat(),
-            ),
-        )
-        self._conn.commit()
-        return cursor.lastrowid
+        conn = self._db.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """INSERT INTO schedules
+                       (name, prompt, cron_expression, deliver_to, telegram_chat_id, next_run_at, created_at)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+                    (
+                        name,
+                        prompt,
+                        cron_expression,
+                        deliver_to,
+                        telegram_chat_id,
+                        next_run.isoformat(),
+                        now.isoformat(),
+                    ),
+                )
+                row = cur.fetchone()
+            conn.commit()
+            return row["id"]
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            self._db.put_connection(conn)
 
     def upsert(
         self,
@@ -156,71 +168,110 @@ class SchedulerStore:
 
     def list_all(self) -> list[dict[str, Any]]:
         """Return all scheduled tasks."""
-        rows = self._conn.execute(
-            "SELECT * FROM schedules ORDER BY name"
-        ).fetchall()
-        return [dict(row) for row in rows]
+        conn = self._db.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT * FROM schedules ORDER BY name")
+                rows = cur.fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            self._db.put_connection(conn)
 
     def get(self, name: str) -> dict[str, Any] | None:
         """Get a task by name. Returns None if not found."""
-        row = self._conn.execute(
-            "SELECT * FROM schedules WHERE name = ?", (name,)
-        ).fetchone()
-        return dict(row) if row else None
+        conn = self._db.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT * FROM schedules WHERE name = %s", (name,)
+                )
+                row = cur.fetchone()
+            return dict(row) if row else None
+        finally:
+            self._db.put_connection(conn)
 
     def get_due(self, now: datetime | None = None) -> list[dict[str, Any]]:
         """Return enabled tasks whose next_run_at is in the past."""
         if now is None:
             now = datetime.now(timezone.utc)
-        rows = self._conn.execute(
-            "SELECT * FROM schedules WHERE enabled = 1 AND next_run_at <= ?",
-            (now.isoformat(),),
-        ).fetchall()
-        return [dict(row) for row in rows]
+        conn = self._db.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT * FROM schedules WHERE enabled = TRUE AND next_run_at <= %s",
+                    (now.isoformat(),),
+                )
+                rows = cur.fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            self._db.put_connection(conn)
 
     def mark_run(self, task_id: int, now: datetime | None = None) -> None:
         """Update last_run_at and compute the next next_run_at."""
         if now is None:
             now = datetime.now(timezone.utc)
 
-        row = self._conn.execute(
-            "SELECT cron_expression FROM schedules WHERE id = ?", (task_id,)
-        ).fetchone()
-        if not row:
-            return
+        conn = self._db.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT cron_expression FROM schedules WHERE id = %s", (task_id,)
+                )
+                row = cur.fetchone()
+                if not row:
+                    return
 
-        next_run = compute_next_run(row["cron_expression"], after=now)
-        self._conn.execute(
-            "UPDATE schedules SET last_run_at = ?, next_run_at = ? WHERE id = ?",
-            (now.isoformat(), next_run.isoformat(), task_id),
-        )
-        self._conn.commit()
+                next_run = compute_next_run(row["cron_expression"], after=now)
+                cur.execute(
+                    "UPDATE schedules SET last_run_at = %s, next_run_at = %s WHERE id = %s",
+                    (now.isoformat(), next_run.isoformat(), task_id),
+                )
+            conn.commit()
+        finally:
+            self._db.put_connection(conn)
 
     def delete(self, name: str) -> bool:
         """Delete a task by name."""
-        cursor = self._conn.execute(
-            "DELETE FROM schedules WHERE name = ?", (name,)
-        )
-        self._conn.commit()
-        return cursor.rowcount > 0
+        conn = self._db.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM schedules WHERE name = %s", (name,)
+                )
+                deleted = cur.rowcount > 0
+            conn.commit()
+            return deleted
+        finally:
+            self._db.put_connection(conn)
 
     def toggle(self, name: str, enabled: bool) -> bool:
         """Enable or disable a task."""
-        cursor = self._conn.execute(
-            "UPDATE schedules SET enabled = ? WHERE name = ?",
-            (1 if enabled else 0, name),
-        )
-        self._conn.commit()
-        return cursor.rowcount > 0
+        conn = self._db.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE schedules SET enabled = %s WHERE name = %s",
+                    (enabled, name),
+                )
+                toggled = cur.rowcount > 0
+            conn.commit()
+            return toggled
+        finally:
+            self._db.put_connection(conn)
 
     def count(self) -> int:
         """Return the total number of scheduled tasks."""
-        row = self._conn.execute("SELECT COUNT(*) FROM schedules").fetchone()
-        return row[0]
+        conn = self._db.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) AS cnt FROM schedules")
+                row = cur.fetchone()
+            return row["cnt"]
+        finally:
+            self._db.put_connection(conn)
 
     def close(self) -> None:
-        """Close the database connection."""
-        self._conn.close()
+        """No-op — connection pool is managed by Database."""
 
 
 class Scheduler:
@@ -291,7 +342,7 @@ class Scheduler:
 
         if deliver_to in ("telegram", "both") and self._telegram_send and chat_id:
             try:
-                header = f"📋 Scheduled task '{task['name']}':\n\n"
+                header = f"\U0001f4cb Scheduled task '{task['name']}':\n\n"
                 self._telegram_send(chat_id, header + result)
             except Exception:
                 logger.exception(

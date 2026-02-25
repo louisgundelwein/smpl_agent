@@ -1,37 +1,41 @@
-"""CalDAV connection registry with SQLite persistence."""
+"""CalDAV connection registry with Postgres persistence."""
 
-import sqlite3
 from datetime import datetime, timezone
 from typing import Any
 
+from src.db import Database
+
 
 class CalendarConnectionStore:
-    """Persistent CalDAV connection registry using SQLite.
+    """Persistent CalDAV connection registry using Postgres.
 
     Stores CalDAV server connections (URL, credentials, provider type)
     so the agent can manage multiple calendar providers at runtime.
     """
 
-    def __init__(self, db_path: str) -> None:
-        self._conn = sqlite3.connect(db_path, check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA journal_mode=WAL")
+    def __init__(self, db: Database) -> None:
+        self._db = db
         self._init_schema()
 
     def _init_schema(self) -> None:
         """Create the connections table if it doesn't exist."""
-        self._conn.execute("""
-            CREATE TABLE IF NOT EXISTS connections (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL UNIQUE,
-                url TEXT NOT NULL,
-                username TEXT NOT NULL,
-                password TEXT NOT NULL,
-                provider TEXT NOT NULL DEFAULT 'caldav',
-                added_at TEXT NOT NULL
-            )
-        """)
-        self._conn.commit()
+        conn = self._db.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS connections (
+                        id SERIAL PRIMARY KEY,
+                        name TEXT NOT NULL UNIQUE,
+                        url TEXT NOT NULL,
+                        username TEXT NOT NULL,
+                        password TEXT NOT NULL,
+                        provider TEXT NOT NULL DEFAULT 'caldav',
+                        added_at TEXT NOT NULL
+                    )
+                """)
+            conn.commit()
+        finally:
+            self._db.put_connection(conn)
 
     def add(
         self,
@@ -54,36 +58,57 @@ class CalendarConnectionStore:
             The ID of the stored connection.
 
         Raises:
-            sqlite3.IntegrityError: If name already exists.
+            psycopg2.errors.UniqueViolation: If name already exists.
         """
         now = datetime.now(timezone.utc).isoformat()
-        cursor = self._conn.execute(
-            """INSERT INTO connections (name, url, username, password, provider, added_at)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (name, url, username, password, provider, now),
-        )
-        self._conn.commit()
-        return cursor.lastrowid
+        conn = self._db.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """INSERT INTO connections (name, url, username, password, provider, added_at)
+                       VALUES (%s, %s, %s, %s, %s, %s) RETURNING id""",
+                    (name, url, username, password, provider, now),
+                )
+                row = cur.fetchone()
+            conn.commit()
+            return row["id"]
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            self._db.put_connection(conn)
 
     def list_all(self) -> list[dict[str, Any]]:
         """Return all registered connections (passwords redacted)."""
-        rows = self._conn.execute(
-            "SELECT id, name, url, username, provider, added_at "
-            "FROM connections ORDER BY name"
-        ).fetchall()
-        return [dict(row) for row in rows]
+        conn = self._db.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id, name, url, username, provider, added_at "
+                    "FROM connections ORDER BY name"
+                )
+                rows = cur.fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            self._db.put_connection(conn)
 
     def get(self, name: str) -> dict[str, Any] | None:
         """Get a connection by name (includes password for CalDAV auth).
 
         Returns None if not found.
         """
-        row = self._conn.execute(
-            "SELECT id, name, url, username, password, provider, added_at "
-            "FROM connections WHERE name = ?",
-            (name,),
-        ).fetchone()
-        return dict(row) if row else None
+        conn = self._db.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id, name, url, username, password, provider, added_at "
+                    "FROM connections WHERE name = %s",
+                    (name,),
+                )
+                row = cur.fetchone()
+            return dict(row) if row else None
+        finally:
+            self._db.put_connection(conn)
 
     def remove(self, name: str) -> bool:
         """Remove a connection by name.
@@ -91,17 +116,28 @@ class CalendarConnectionStore:
         Returns:
             True if a connection was removed, False if name not found.
         """
-        cursor = self._conn.execute(
-            "DELETE FROM connections WHERE name = ?", (name,),
-        )
-        self._conn.commit()
-        return cursor.rowcount > 0
+        conn = self._db.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM connections WHERE name = %s", (name,),
+                )
+                removed = cur.rowcount > 0
+            conn.commit()
+            return removed
+        finally:
+            self._db.put_connection(conn)
 
     def count(self) -> int:
         """Return the total number of registered connections."""
-        row = self._conn.execute("SELECT COUNT(*) FROM connections").fetchone()
-        return row[0]
+        conn = self._db.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) AS cnt FROM connections")
+                row = cur.fetchone()
+            return row["cnt"]
+        finally:
+            self._db.put_connection(conn)
 
     def close(self) -> None:
-        """Close the database connection."""
-        self._conn.close()
+        """No-op — connection pool is managed by Database."""

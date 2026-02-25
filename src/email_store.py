@@ -1,40 +1,44 @@
-"""Email account registry with SQLite persistence."""
+"""Email account registry with Postgres persistence."""
 
-import sqlite3
 from datetime import datetime, timezone
 from typing import Any
 
+from src.db import Database
+
 
 class EmailAccountStore:
-    """Persistent email account registry using SQLite.
+    """Persistent email account registry using Postgres.
 
     Stores IMAP/SMTP connection details (host, port, credentials)
     so the agent can manage multiple email accounts at runtime.
     """
 
-    def __init__(self, db_path: str) -> None:
-        self._conn = sqlite3.connect(db_path, check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA journal_mode=WAL")
+    def __init__(self, db: Database) -> None:
+        self._db = db
         self._init_schema()
 
     def _init_schema(self) -> None:
         """Create the accounts table if it doesn't exist."""
-        self._conn.execute("""
-            CREATE TABLE IF NOT EXISTS accounts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL UNIQUE,
-                email_address TEXT NOT NULL,
-                password TEXT NOT NULL,
-                imap_host TEXT NOT NULL,
-                imap_port INTEGER NOT NULL DEFAULT 993,
-                smtp_host TEXT NOT NULL,
-                smtp_port INTEGER NOT NULL DEFAULT 587,
-                provider TEXT NOT NULL DEFAULT 'generic',
-                added_at TEXT NOT NULL
-            )
-        """)
-        self._conn.commit()
+        conn = self._db.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS accounts (
+                        id SERIAL PRIMARY KEY,
+                        name TEXT NOT NULL UNIQUE,
+                        email_address TEXT NOT NULL,
+                        password TEXT NOT NULL,
+                        imap_host TEXT NOT NULL,
+                        imap_port INTEGER NOT NULL DEFAULT 993,
+                        smtp_host TEXT NOT NULL,
+                        smtp_port INTEGER NOT NULL DEFAULT 587,
+                        provider TEXT NOT NULL DEFAULT 'generic',
+                        added_at TEXT NOT NULL
+                    )
+                """)
+            conn.commit()
+        finally:
+            self._db.put_connection(conn)
 
     def add(
         self,
@@ -63,41 +67,62 @@ class EmailAccountStore:
             The ID of the stored account.
 
         Raises:
-            sqlite3.IntegrityError: If name already exists.
+            psycopg2.errors.UniqueViolation: If name already exists.
         """
         now = datetime.now(timezone.utc).isoformat()
-        cursor = self._conn.execute(
-            """INSERT INTO accounts
-               (name, email_address, password, imap_host, imap_port,
-                smtp_host, smtp_port, provider, added_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (name, email_address, password, imap_host, imap_port,
-             smtp_host, smtp_port, provider, now),
-        )
-        self._conn.commit()
-        return cursor.lastrowid
+        conn = self._db.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """INSERT INTO accounts
+                       (name, email_address, password, imap_host, imap_port,
+                        smtp_host, smtp_port, provider, added_at)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+                    (name, email_address, password, imap_host, imap_port,
+                     smtp_host, smtp_port, provider, now),
+                )
+                row = cur.fetchone()
+            conn.commit()
+            return row["id"]
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            self._db.put_connection(conn)
 
     def list_all(self) -> list[dict[str, Any]]:
         """Return all registered accounts (passwords redacted)."""
-        rows = self._conn.execute(
-            "SELECT id, name, email_address, imap_host, imap_port, "
-            "smtp_host, smtp_port, provider, added_at "
-            "FROM accounts ORDER BY name"
-        ).fetchall()
-        return [dict(row) for row in rows]
+        conn = self._db.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id, name, email_address, imap_host, imap_port, "
+                    "smtp_host, smtp_port, provider, added_at "
+                    "FROM accounts ORDER BY name"
+                )
+                rows = cur.fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            self._db.put_connection(conn)
 
     def get(self, name: str) -> dict[str, Any] | None:
         """Get an account by name (includes password for auth).
 
         Returns None if not found.
         """
-        row = self._conn.execute(
-            "SELECT id, name, email_address, password, imap_host, imap_port, "
-            "smtp_host, smtp_port, provider, added_at "
-            "FROM accounts WHERE name = ?",
-            (name,),
-        ).fetchone()
-        return dict(row) if row else None
+        conn = self._db.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id, name, email_address, password, imap_host, imap_port, "
+                    "smtp_host, smtp_port, provider, added_at "
+                    "FROM accounts WHERE name = %s",
+                    (name,),
+                )
+                row = cur.fetchone()
+            return dict(row) if row else None
+        finally:
+            self._db.put_connection(conn)
 
     def remove(self, name: str) -> bool:
         """Remove an account by name.
@@ -105,17 +130,28 @@ class EmailAccountStore:
         Returns:
             True if an account was removed, False if name not found.
         """
-        cursor = self._conn.execute(
-            "DELETE FROM accounts WHERE name = ?", (name,),
-        )
-        self._conn.commit()
-        return cursor.rowcount > 0
+        conn = self._db.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM accounts WHERE name = %s", (name,),
+                )
+                removed = cur.rowcount > 0
+            conn.commit()
+            return removed
+        finally:
+            self._db.put_connection(conn)
 
     def count(self) -> int:
         """Return the total number of registered accounts."""
-        row = self._conn.execute("SELECT COUNT(*) FROM accounts").fetchone()
-        return row[0]
+        conn = self._db.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) AS cnt FROM accounts")
+                row = cur.fetchone()
+            return row["cnt"]
+        finally:
+            self._db.put_connection(conn)
 
     def close(self) -> None:
-        """Close the database connection."""
-        self._conn.close()
+        """No-op — connection pool is managed by Database."""
