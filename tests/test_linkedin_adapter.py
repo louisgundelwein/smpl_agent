@@ -141,6 +141,26 @@ class TestAdvancedContent:
         assert "'C'" in task.task_description
 
 
+class TestSignup:
+    def test_build_signup_task(self, adapter):
+        task = adapter.build_signup_task(
+            first_name="John",
+            last_name="Doe",
+            email_address="john@example.com",
+            password="secret123",
+            email_account_name="work",
+        )
+        assert isinstance(task, BrowserTask)
+        assert "John" in task.task_description
+        assert "Doe" in task.task_description
+        assert "john@example.com" in task.task_description
+        assert "secret123" in task.task_description
+        assert "work" in task.task_description
+        assert "signup" in task.start_url
+        assert "Agree & Join" in task.task_description
+        assert "phone_verification_required" in task.task_description
+
+
 class TestAnalytics:
     def test_build_profile_analytics_task(self, adapter, creds):
         task = adapter.build_profile_analytics_task(creds)

@@ -389,6 +389,38 @@ class LinkedInAdapter(PlatformAdapter):
         )
 
     # ------------------------------------------------------------------
+    # Account creation
+    # ------------------------------------------------------------------
+
+    def build_signup_task(
+        self,
+        first_name: str,
+        last_name: str,
+        email_address: str,
+        password: str,
+        email_account_name: str,
+    ) -> BrowserTask:
+        task = (
+            "Go to https://www.linkedin.com/signup. "
+            f"Fill in the first name field with '{first_name}'. "
+            f"Fill in the last name field with '{last_name}'. "
+            f"Fill in the email field with '{email_address}'. "
+            f"Fill in the password field with '{password}'. "
+            "Click the 'Agree & Join' button. "
+            "If a verification code is requested, call the "
+            f"read_verification_email action with email_account_name='{email_account_name}' "
+            "to get the code, then enter it in the verification field and click 'Verify'. "
+            "If a CAPTCHA appears, solve it visually. "
+            "If a phone number is required and cannot be skipped (try 'Skip' or 'Not now' first), "
+            'return {"error": "phone_verification_required"}. '
+            'On success, return {"success": true}.'
+        )
+        return self._enhance(
+            BrowserTask(task_description=task, start_url="https://www.linkedin.com/signup"),
+            context_keys=["signup", "captcha_handling"],
+        )
+
+    # ------------------------------------------------------------------
     # Analytics
     # ------------------------------------------------------------------
 

@@ -194,6 +194,8 @@ def create_agent(
             openai_base_url=config.openai_base_url,
             timeout=config.browser_use_timeout,
             action_delay=config.linkedin_action_delay,
+            browser_profiles_dir=config.browser_profiles_dir,
+            email_store=email_store,
         ))
     if config.browser_use_enabled:
         registry.register(BrowserTool(

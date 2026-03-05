@@ -127,3 +127,19 @@
 - Avoid sending more than ~20 connection requests per day
 - Avoid commenting on more than ~30 posts per day
 - Profile views are throttled — browsing too fast triggers "unusual activity" warnings
+
+## Account Creation (Signup)
+- Signup URL: https://www.linkedin.com/signup
+- Fields: first name, last name, email, password
+- Submit: "Agree & Join" button
+- Email verification: 6-digit code sent to the email address
+- Verification field appears on the same page
+- Enter code and click "Verify"
+- Phone number is optional — try to skip ("Skip" / "Not now")
+
+## CAPTCHA Handling
+- CAPTCHAs appear as image challenges or puzzle sliders
+- For image CAPTCHAs: identify described objects, click correct tiles
+- For text CAPTCHAs: read distorted text and type it
+- reCAPTCHA checkbox: just click it
+- After 2 failed attempts: abort

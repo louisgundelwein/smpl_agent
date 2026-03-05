@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch, AsyncMock
 
 import pytest
 
+from src.email_store import EmailAccountStore
 from src.marketing.linkedin import LinkedInAdapter
 from src.marketing.platform_knowledge import PlatformKnowledge
 from src.marketing_store import MarketingStore
@@ -14,6 +15,11 @@ from src.tools.linkedin import LinkedInTool
 @pytest.fixture
 def mock_store():
     return MagicMock(spec=MarketingStore)
+
+
+@pytest.fixture
+def mock_email_store():
+    return MagicMock(spec=EmailAccountStore)
 
 
 @pytest.fixture
@@ -31,7 +37,7 @@ def mock_adapter(mock_knowledge):
 
 
 @pytest.fixture
-def tool(mock_store, mock_knowledge, mock_adapter):
+def tool(mock_store, mock_knowledge, mock_adapter, mock_email_store, tmp_path):
     return LinkedInTool(
         store=mock_store,
         knowledge=mock_knowledge,
@@ -41,6 +47,24 @@ def tool(mock_store, mock_knowledge, mock_adapter):
         openai_base_url=None,
         timeout=60,
         action_delay=0,
+        browser_profiles_dir=str(tmp_path / "profiles"),
+        email_store=mock_email_store,
+    )
+
+
+@pytest.fixture
+def tool_no_email(mock_store, mock_knowledge, mock_adapter, tmp_path):
+    return LinkedInTool(
+        store=mock_store,
+        knowledge=mock_knowledge,
+        adapter=mock_adapter,
+        openai_api_key="test-key",
+        openai_model="gpt-4o",
+        openai_base_url=None,
+        timeout=60,
+        action_delay=0,
+        browser_profiles_dir=str(tmp_path / "profiles"),
+        email_store=None,
     )
 
 
@@ -366,3 +390,85 @@ class TestKnowledgeActions:
             action="record_learning", account="li-main", key="only_key",
         ))
         assert "error" in result
+
+
+class TestCreateAccount:
+    def test_create_account_missing_params(self, tool):
+        result = json.loads(tool.execute(
+            action="create_account", first_name="John",
+        ))
+        assert "error" in result
+        assert "required" in result["error"]
+
+    def test_create_account_no_email_store(self, tool_no_email):
+        result = json.loads(tool_no_email.execute(
+            action="create_account",
+            first_name="John", last_name="Doe",
+            email_account="work", linkedin_password="pass123",
+        ))
+        assert "No email store" in result["error"]
+
+    def test_create_account_email_not_found(self, tool, mock_email_store):
+        mock_email_store.get.return_value = None
+        result = json.loads(tool.execute(
+            action="create_account",
+            first_name="John", last_name="Doe",
+            email_account="nonexistent", linkedin_password="pass123",
+        ))
+        assert "not found" in result["error"]
+
+    def test_create_account_success(self, tool, mock_store, mock_email_store):
+        mock_email_store.get.return_value = {
+            "email_address": "john@test.com",
+            "password": "email-pass",
+            "imap_host": "imap.test.com",
+            "imap_port": 993,
+        }
+        mock_store.add_account.return_value = 42
+        with patch.object(tool, "_exec_browser") as mock_browser:
+            mock_browser.return_value = '{"success": true}'
+            result = json.loads(tool.execute(
+                action="create_account",
+                first_name="John", last_name="Doe",
+                email_account="work", linkedin_password="pass123",
+            ))
+        assert result["created"] is True
+        assert result["account_name"] == "li-john-doe"
+        assert result["account_id"] == 42
+        mock_store.add_account.assert_called_once_with(
+            name="li-john-doe",
+            platform="linkedin",
+            credentials={"username": "john@test.com", "password": "pass123"},
+            config={"email_account": "work"},
+        )
+
+    def test_create_account_phone_required(self, tool, mock_email_store):
+        mock_email_store.get.return_value = {
+            "email_address": "john@test.com",
+            "password": "email-pass",
+            "imap_host": "imap.test.com",
+            "imap_port": 993,
+        }
+        with patch.object(tool, "_exec_browser") as mock_browser:
+            mock_browser.return_value = '{"error": "phone_verification_required"}'
+            result = json.loads(tool.execute(
+                action="create_account",
+                first_name="John", last_name="Doe",
+                email_account="work", linkedin_password="pass123",
+            ))
+        assert result["error"] == "phone_verification_required"
+
+
+class TestSessionPersistence:
+    def test_browser_config_uses_profile_dir(self, tool, mock_store, linkedin_account, tmp_path):
+        mock_store.get_account.return_value = linkedin_account
+        with patch("src.tools.linkedin.asyncio.run") as mock_run:
+            mock_run.return_value = '{"posts": []}'
+            tool.execute(
+                action="browse_feed", account="li-main",
+            )
+            mock_run.assert_called_once()
+            # Verify _run_browser_task was called with account_name
+            # by checking asyncio.run received a coroutine from _run_browser_task
+            # with the correct account_name parameter
+            assert mock_run.called

@@ -50,6 +50,7 @@ class Config:
     linkedin_enabled: bool
     linkedin_action_delay: int
     linkedin_knowledge_dir: str
+    browser_profiles_dir: str
 
     @classmethod
     def from_env(cls, env_path: str = ".env") -> "Config":
@@ -112,6 +113,7 @@ class Config:
         linkedin_enabled = os.getenv("LINKEDIN_ENABLED", "false").lower() in ("true", "1", "yes")
         linkedin_action_delay = int(os.getenv("LINKEDIN_ACTION_DELAY_SECONDS", "2"))
         linkedin_knowledge_dir = os.getenv("LINKEDIN_KNOWLEDGE_DIR", "src/marketing/platform_guides")
+        browser_profiles_dir = os.getenv("BROWSER_PROFILES_DIR", "browser_profiles")
 
         if not openai_key:
             raise ValueError("OPENAI_API_KEY is required")
@@ -161,4 +163,5 @@ class Config:
             linkedin_enabled=linkedin_enabled,
             linkedin_action_delay=linkedin_action_delay,
             linkedin_knowledge_dir=linkedin_knowledge_dir,
+            browser_profiles_dir=browser_profiles_dir,
         )

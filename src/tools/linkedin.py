@@ -3,7 +3,9 @@
 import asyncio
 import json
 import logging
+import re
 import time
+from pathlib import Path
 from typing import Any
 
 from src.marketing.base import BrowserTask
@@ -33,6 +35,8 @@ class LinkedInTool(Tool):
         openai_base_url: str | None = None,
         timeout: int = 300,
         action_delay: int = 2,
+        browser_profiles_dir: str = "browser_profiles",
+        email_store: "Any | None" = None,
     ) -> None:
         self._store = store
         self._knowledge = knowledge
@@ -43,6 +47,8 @@ class LinkedInTool(Tool):
         self._timeout = timeout
         self._action_delay = action_delay
         self._last_action_time = 0.0
+        self._browser_profiles_dir = browser_profiles_dir
+        self._email_store = email_store
 
     @property
     def name(self) -> str:
@@ -66,6 +72,7 @@ class LinkedInTool(Tool):
                         "action": {
                             "type": "string",
                             "enum": [
+                                "create_account",
                                 "browse_feed", "like_post", "comment_post", "repost",
                                 "send_connection", "accept_connections",
                                 "send_message", "search_people",
@@ -163,8 +170,24 @@ class LinkedInTool(Tool):
                             "type": "object",
                             "description": "Extra metadata for drafts (slides, poll_options, etc.).",
                         },
+                        "first_name": {
+                            "type": "string",
+                            "description": "First name for account creation.",
+                        },
+                        "last_name": {
+                            "type": "string",
+                            "description": "Last name for account creation.",
+                        },
+                        "email_account": {
+                            "type": "string",
+                            "description": "Name of registered email account for verification.",
+                        },
+                        "linkedin_password": {
+                            "type": "string",
+                            "description": "Password for the new LinkedIn account.",
+                        },
                     },
-                    "required": ["action", "account"],
+                    "required": ["action"],
                 },
             },
         }
@@ -175,6 +198,11 @@ class LinkedInTool(Tool):
 
     def execute(self, **kwargs: Any) -> str:
         action = kwargs.get("action")
+        if action == "create_account":
+            try:
+                return self._action_create_account(kwargs)
+            except Exception as exc:
+                return json.dumps({"error": str(exc)})
         try:
             handler = getattr(self, f"_action_{action}", None)
             if handler is None:
@@ -212,11 +240,20 @@ class LinkedInTool(Tool):
             time.sleep(self._action_delay - elapsed)
         self._last_action_time = time.time()
 
-    async def _run_browser_task(self, task: BrowserTask) -> str:
-        from browser_use import Agent as BrowserAgent, Browser, BrowserConfig
+    async def _run_browser_task(
+        self, task: BrowserTask, account_name: str | None = None,
+    ) -> str:
+        from browser_use import Agent as BrowserAgent, Browser, BrowserConfig, Controller
         from langchain_openai import ChatOpenAI
 
-        browser_config = BrowserConfig(headless=True)
+        if account_name:
+            profile_dir = Path(self._browser_profiles_dir) / account_name
+            profile_dir.mkdir(parents=True, exist_ok=True)
+            browser_config = BrowserConfig(
+                headless=True, user_data_dir=str(profile_dir),
+            )
+        else:
+            browser_config = BrowserConfig(headless=True)
         browser = Browser(config=browser_config)
 
         llm_kwargs: dict[str, Any] = {
@@ -231,7 +268,20 @@ class LinkedInTool(Tool):
         if task.start_url:
             full_task = f"Go to {task.start_url}. Then: {full_task}"
 
-        agent = BrowserAgent(task=full_task, llm=llm, browser=browser)
+        controller = Controller()
+        if self._email_store:
+            from src.marketing.email_helper import EmailVerificationReader
+
+            email_store = self._email_store
+
+            @controller.action("Read verification email code from inbox")
+            async def read_verification_email(email_account_name: str) -> str:
+                reader = EmailVerificationReader(email_store)
+                return json.dumps(reader.read_verification_code(email_account_name))
+
+        agent = BrowserAgent(
+            task=full_task, llm=llm, browser=browser, controller=controller,
+        )
 
         try:
             result = await asyncio.wait_for(
@@ -242,9 +292,9 @@ class LinkedInTool(Tool):
 
         return str(result)
 
-    def _exec_browser(self, task: BrowserTask) -> str:
+    def _exec_browser(self, task: BrowserTask, account_name: str | None = None) -> str:
         self._enforce_delay()
-        return asyncio.run(self._run_browser_task(task))
+        return asyncio.run(self._run_browser_task(task, account_name))
 
     # ------------------------------------------------------------------
     # Feed interactions
@@ -255,7 +305,7 @@ class LinkedInTool(Tool):
         task = self._adapter.build_feed_browse_task(
             creds, query=kw.get("query"), limit=kw.get("limit", 10),
         )
-        return self._exec_browser(task)
+        return self._exec_browser(task, account_name=kw.get("account"))
 
     def _action_like_post(self, kw: dict) -> str:
         post_url = kw.get("post_url")
@@ -263,7 +313,7 @@ class LinkedInTool(Tool):
             return json.dumps({"error": "post_url is required"})
         _, creds = self._get_credentials(kw)
         task = self._adapter.build_like_task(creds, post_url)
-        return self._exec_browser(task)
+        return self._exec_browser(task, account_name=kw.get("account"))
 
     def _action_comment_post(self, kw: dict) -> str:
         post_url = kw.get("post_url")
@@ -272,7 +322,7 @@ class LinkedInTool(Tool):
             return json.dumps({"error": "post_url and content are required"})
         _, creds = self._get_credentials(kw)
         task = self._adapter.build_comment_external_task(creds, post_url, content)
-        return self._exec_browser(task)
+        return self._exec_browser(task, account_name=kw.get("account"))
 
     def _action_repost(self, kw: dict) -> str:
         post_url = kw.get("post_url")
@@ -282,7 +332,7 @@ class LinkedInTool(Tool):
         task = self._adapter.build_repost_task(
             creds, post_url, commentary=kw.get("content"),
         )
-        return self._exec_browser(task)
+        return self._exec_browser(task, account_name=kw.get("account"))
 
     # ------------------------------------------------------------------
     # Networking
@@ -296,12 +346,12 @@ class LinkedInTool(Tool):
         task = self._adapter.build_connection_request_task(
             creds, profile_url, note=kw.get("note"),
         )
-        return self._exec_browser(task)
+        return self._exec_browser(task, account_name=kw.get("account"))
 
     def _action_accept_connections(self, kw: dict) -> str:
         _, creds = self._get_credentials(kw)
         task = self._adapter.build_accept_connections_task(creds)
-        return self._exec_browser(task)
+        return self._exec_browser(task, account_name=kw.get("account"))
 
     def _action_send_message(self, kw: dict) -> str:
         profile_url = kw.get("profile_url")
@@ -310,14 +360,14 @@ class LinkedInTool(Tool):
             return json.dumps({"error": "profile_url and message are required"})
         _, creds = self._get_credentials(kw)
         task = self._adapter.build_send_message_task(creds, profile_url, message)
-        return self._exec_browser(task)
+        return self._exec_browser(task, account_name=kw.get("account"))
 
     def _action_search_people(self, kw: dict) -> str:
         _, creds = self._get_credentials(kw)
         task = self._adapter.build_search_people_task(
             creds, filters=kw.get("filters"),
         )
-        return self._exec_browser(task)
+        return self._exec_browser(task, account_name=kw.get("account"))
 
     # ------------------------------------------------------------------
     # Content creation
@@ -334,7 +384,7 @@ class LinkedInTool(Tool):
             image_path=kw.get("image_path"),
             url=kw.get("url"),
         )
-        return self._exec_browser(task)
+        return self._exec_browser(task, account_name=kw.get("account"))
 
     def _action_create_article(self, kw: dict) -> str:
         title = kw.get("title")
@@ -343,7 +393,7 @@ class LinkedInTool(Tool):
             return json.dumps({"error": "title and content are required"})
         _, creds = self._get_credentials(kw)
         task = self._adapter.build_article_task(creds, title, content)
-        return self._exec_browser(task)
+        return self._exec_browser(task, account_name=kw.get("account"))
 
     def _action_create_carousel(self, kw: dict) -> str:
         content = kw.get("content")
@@ -352,7 +402,7 @@ class LinkedInTool(Tool):
             return json.dumps({"error": "content and document_path are required"})
         _, creds = self._get_credentials(kw)
         task = self._adapter.build_carousel_task(creds, content, document_path)
-        return self._exec_browser(task)
+        return self._exec_browser(task, account_name=kw.get("account"))
 
     def _action_create_poll(self, kw: dict) -> str:
         content = kw.get("content")
@@ -363,7 +413,7 @@ class LinkedInTool(Tool):
             return json.dumps({"error": "At least 2 options are required"})
         _, creds = self._get_credentials(kw)
         task = self._adapter.build_poll_task(creds, content, options)
-        return self._exec_browser(task)
+        return self._exec_browser(task, account_name=kw.get("account"))
 
     # ------------------------------------------------------------------
     # Drafts
@@ -417,7 +467,7 @@ class LinkedInTool(Tool):
                 creds, draft["content"], title=draft.get("title"),
             )
 
-        result = self._exec_browser(task)
+        result = self._exec_browser(task, account_name=kw.get("account"))
         self._store.delete_draft(draft_id)
         return result
 
@@ -428,7 +478,7 @@ class LinkedInTool(Tool):
     def _action_get_profile_analytics(self, kw: dict) -> str:
         acct, creds = self._get_credentials(kw)
         task = self._adapter.build_profile_analytics_task(creds)
-        result_str = self._exec_browser(task)
+        result_str = self._exec_browser(task, account_name=kw.get("account"))
 
         # Try to store the metrics
         try:
@@ -451,12 +501,12 @@ class LinkedInTool(Tool):
             return json.dumps({"error": "post_url is required"})
         _, creds = self._get_credentials(kw)
         task = self._adapter.build_metrics_task(creds, post_url)
-        return self._exec_browser(task)
+        return self._exec_browser(task, account_name=kw.get("account"))
 
     def _action_get_ssi_score(self, kw: dict) -> str:
         _, creds = self._get_credentials(kw)
         task = self._adapter.build_ssi_score_task(creds)
-        return self._exec_browser(task)
+        return self._exec_browser(task, account_name=kw.get("account"))
 
     def _action_get_analytics_report(self, kw: dict) -> str:
         acct, _ = self._get_credentials(kw)
@@ -510,7 +560,7 @@ class LinkedInTool(Tool):
             ),
             start_url="https://www.linkedin.com",
         )
-        result_str = self._exec_browser(task)
+        result_str = self._exec_browser(task, account_name=kw.get("account"))
 
         # Store observations as learnings
         try:
@@ -536,3 +586,63 @@ class LinkedInTool(Tool):
             platform="linkedin", key=key, value=value, confidence=0.8,
         )
         return json.dumps({"recorded": True, "key": key})
+
+    # ------------------------------------------------------------------
+    # Account creation
+    # ------------------------------------------------------------------
+
+    def _action_create_account(self, kw: dict) -> str:
+        first_name = kw.get("first_name")
+        last_name = kw.get("last_name")
+        email_account = kw.get("email_account")
+        linkedin_password = kw.get("linkedin_password")
+
+        if not all([first_name, last_name, email_account, linkedin_password]):
+            return json.dumps({
+                "error": "first_name, last_name, email_account, and linkedin_password are required",
+            })
+
+        if not self._email_store:
+            return json.dumps({"error": "No email store configured — cannot create account"})
+
+        email_acct = self._email_store.get(email_account)
+        if not email_acct:
+            return json.dumps({"error": f"Email account '{email_account}' not found"})
+
+        email_address = email_acct["email_address"]
+
+        task = self._adapter.build_signup_task(
+            first_name=first_name,
+            last_name=last_name,
+            email_address=email_address,
+            password=linkedin_password,
+            email_account_name=email_account,
+        )
+
+        result_str = self._exec_browser(task)
+
+        try:
+            data = json.loads(result_str)
+        except (json.JSONDecodeError, TypeError):
+            return json.dumps({"error": f"Unexpected browser result: {result_str}"})
+
+        if data.get("error"):
+            return json.dumps({"error": data["error"]})
+
+        if data.get("success"):
+            safe_name = re.sub(r"[^a-z0-9-]", "", f"li-{first_name}-{last_name}".lower())
+            account_id = self._store.add_account(
+                name=safe_name,
+                platform="linkedin",
+                credentials={"username": email_address, "password": linkedin_password},
+                config={"email_account": email_account},
+            )
+            profile_dir = Path(self._browser_profiles_dir) / safe_name
+            profile_dir.mkdir(parents=True, exist_ok=True)
+            return json.dumps({
+                "created": True,
+                "account_name": safe_name,
+                "account_id": account_id,
+            })
+
+        return json.dumps({"error": "Account creation did not succeed", "details": data})
