@@ -9,6 +9,8 @@ from src.events import (
     ContinuationEvent,
     LLMEndEvent,
     LLMStartEvent,
+    MemoryCleanupEvent,
+    MemoryRecallEvent,
     RunSummaryEvent,
     SubagentResultsCollectedEvent,
     SubagentSpawnedEvent,
@@ -67,6 +69,17 @@ def format_event(event: AgentEvent) -> str | None:
         return f"  [subagent] waiting for {event.active_count} subagent(s) to finish..."
     elif isinstance(event, SubagentResultsCollectedEvent):
         return f"  [subagent] collected {event.count} result(s) ({event.duration_ms}ms)"
+    elif isinstance(event, MemoryRecallEvent):
+        return (
+            f"  [memory] recalled {event.count} "
+            f"memor{'y' if event.count == 1 else 'ies'} "
+            f"(top score: {event.top_score:.2f}, {event.duration_ms}ms)"
+        )
+    elif isinstance(event, MemoryCleanupEvent):
+        return (
+            f"  [memory] cleanup: merged {event.groups_merged} group(s), "
+            f"deleted {event.memories_deleted} duplicate(s)"
+        )
     elif isinstance(event, AutoMemoryStoredEvent):
         preview = event.content[:80].replace("\n", " ")
         return f"  [memory] auto-stored: {preview}..."
@@ -159,6 +172,18 @@ def format_message(msg: dict[str, Any]) -> str | None:
         return (
             f"  [subagent] collected {msg.get('count', '?')} result(s) "
             f"({msg.get('duration_ms', '?')}ms)"
+        )
+    elif msg_type == "memory_recall":
+        count = msg.get("count", "?")
+        return (
+            f"  [memory] recalled {count} "
+            f"memor{'y' if count == 1 else 'ies'} "
+            f"(top score: {msg.get('top_score', '?')}, {msg.get('duration_ms', '?')}ms)"
+        )
+    elif msg_type == "memory_cleanup":
+        return (
+            f"  [memory] cleanup: merged {msg.get('groups_merged', '?')} group(s), "
+            f"deleted {msg.get('memories_deleted', '?')} duplicate(s)"
         )
     elif msg_type == "auto_memory_stored":
         preview = msg.get("content", "")[:80].replace("\n", " ")

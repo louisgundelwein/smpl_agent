@@ -94,7 +94,6 @@ class CodexTool(Tool):
                 "OPENAI_BASE_URL", "OPENAI_API_KEY",
                 "GITHUB_TOKEN", "BRAVE_SEARCH_API_KEY",
                 "TELEGRAM_BOT_TOKEN", "DATABASE_URL",
-                "HYPERLIQUID_WALLET_KEY", "HYPERLIQUID_WALLET_ADDRESS",
             }
             env = {
                 k: v

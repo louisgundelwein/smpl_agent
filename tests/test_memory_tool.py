@@ -116,3 +116,54 @@ def test_exception_returns_error_json(tool, mock_store):
     result = json.loads(tool.execute(action="store", content="test"))
     assert "error" in result
     assert "db locked" in result["error"]
+
+
+# --- cleanup action tests ---
+
+
+def test_schema_includes_cleanup():
+    """Schema includes cleanup in action enum and threshold property."""
+    tool = MemoryTool(memory_store=MagicMock())
+    schema = tool.schema
+    props = schema["function"]["parameters"]["properties"]
+    assert "cleanup" in props["action"]["enum"]
+    assert "threshold" in props
+
+
+def test_cleanup_action_without_auto_memory(mock_store):
+    """Cleanup returns error when auto_memory is not configured."""
+    tool = MemoryTool(memory_store=mock_store, auto_memory=None)
+    result = json.loads(tool.execute(action="cleanup"))
+    assert "error" in result
+    assert "auto_memory" in result["error"]
+
+
+def test_cleanup_action_success():
+    """Cleanup delegates to auto_memory.cleanup_duplicates()."""
+    mock_store = MagicMock()
+    mock_auto_memory = MagicMock()
+    mock_auto_memory.cleanup_duplicates.return_value = [
+        {
+            "merged_id": 10,
+            "deleted_ids": [1, 2],
+            "content": "User prefers Python for scripting tasks.",
+        }
+    ]
+    tool = MemoryTool(memory_store=mock_store, auto_memory=mock_auto_memory)
+
+    result = json.loads(tool.execute(action="cleanup"))
+    assert result["groups_merged"] == 1
+    assert result["total_deleted"] == 2
+    assert len(result["merges"]) == 1
+    mock_auto_memory.cleanup_duplicates.assert_called_once_with(threshold=0.90)
+
+
+def test_cleanup_action_custom_threshold():
+    """Cleanup passes custom threshold to auto_memory."""
+    mock_store = MagicMock()
+    mock_auto_memory = MagicMock()
+    mock_auto_memory.cleanup_duplicates.return_value = []
+    tool = MemoryTool(memory_store=mock_store, auto_memory=mock_auto_memory)
+
+    tool.execute(action="cleanup", threshold=0.85)
+    mock_auto_memory.cleanup_duplicates.assert_called_once_with(threshold=0.85)

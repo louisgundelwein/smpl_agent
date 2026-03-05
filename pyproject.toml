@@ -11,8 +11,6 @@ dependencies = [
     "croniter>=1.3",
     "caldav>=1.3",
     "imap-tools>=1.5",
-    "hyperliquid-python-sdk>=0.22,<1.0",
-    "eth-account>=0.11",
 ]
 
 [project.optional-dependencies]
@@ -20,6 +18,14 @@ dev = [
     "pytest>=8.0",
     "pytest-mock>=3.12",
     "respx>=0.22",
+]
+browser = [
+    "browser-use>=0.1",
+    "langchain-openai>=0.1",
+]
+marketing = [
+    "browser-use>=0.1",
+    "langchain-openai>=0.1",
 ]
 transcription = [
     "torch>=2.0",

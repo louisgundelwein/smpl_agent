@@ -292,7 +292,7 @@ def compute_indicators(
     """Compute multiple indicators and return latest + recent history.
 
     Args:
-        candles: List of candle dicts from Hyperliquid SDK.
+        candles: List of candle dicts (OHLCV format).
         indicators: List of indicator configs, each like:
             {"name": "rsi", "period": 14}
             {"name": "macd", "fast": 12, "slow": 26, "signal_period": 9}

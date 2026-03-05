@@ -149,5 +149,93 @@ class MemoryStore:
         finally:
             self._db.put_connection(conn)
 
+    def find_duplicate_groups(
+        self, threshold: float = 0.90
+    ) -> list[list[dict[str, Any]]]:
+        """Find groups of near-duplicate memories via pgvector cosine similarity.
+
+        Uses a self-join on the memories table to find all pairs with
+        similarity above the threshold, then groups them using union-find.
+
+        Args:
+            threshold: Minimum cosine similarity to consider a duplicate (0-1).
+
+        Returns:
+            List of groups, where each group is a list of memory dicts
+            (id, content, tags, created_at). Only groups with 2+ members.
+        """
+        conn = self._db.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT m1.id AS id1, m2.id AS id2
+                       FROM memories m1
+                       JOIN memories m2 ON m1.id < m2.id
+                       WHERE 1 - (m1.embedding <=> m2.embedding) > %s""",
+                    (threshold,),
+                )
+                pairs = cur.fetchall()
+
+            if not pairs:
+                return []
+
+            # Union-find to group connected IDs.
+            parent: dict[int, int] = {}
+
+            def find(x: int) -> int:
+                while parent.get(x, x) != x:
+                    parent[x] = parent.get(parent[x], parent[x])
+                    x = parent[x]
+                return x
+
+            def union(a: int, b: int) -> None:
+                ra, rb = find(a), find(b)
+                if ra != rb:
+                    parent[ra] = rb
+
+            for pair in pairs:
+                union(pair["id1"], pair["id2"])
+
+            # Collect groups.
+            groups_map: dict[int, list[int]] = {}
+            all_ids = set()
+            for pair in pairs:
+                all_ids.add(pair["id1"])
+                all_ids.add(pair["id2"])
+            for mid in all_ids:
+                root = find(mid)
+                groups_map.setdefault(root, []).append(mid)
+
+            # Deduplicate IDs within each group.
+            groups_map = {
+                root: sorted(set(ids)) for root, ids in groups_map.items()
+            }
+
+            # Fetch full memory data for each group.
+            result: list[list[dict[str, Any]]] = []
+            with conn.cursor() as cur:
+                for ids in groups_map.values():
+                    if len(ids) < 2:
+                        continue
+                    cur.execute(
+                        "SELECT id, content, metadata, created_at FROM memories WHERE id = ANY(%s) ORDER BY id",
+                        (ids,),
+                    )
+                    rows = cur.fetchall()
+                    group = [
+                        {
+                            "id": row["id"],
+                            "content": row["content"],
+                            "tags": (row["metadata"] or {}).get("tags", []),
+                            "created_at": str(row["created_at"]),
+                        }
+                        for row in rows
+                    ]
+                    if len(group) >= 2:
+                        result.append(group)
+            return result
+        finally:
+            self._db.put_connection(conn)
+
     def close(self) -> None:
         """No-op — connection pool is managed by Database."""

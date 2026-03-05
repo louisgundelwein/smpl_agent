@@ -183,3 +183,67 @@ def test_search_tags_empty_when_metadata_is_none():
     ]
     results = store.search("null metadata")
     assert results[0]["tags"] == []
+
+
+# --- find_duplicate_groups() tests ---
+
+
+class TestFindDuplicateGroups:
+    def test_returns_empty_when_no_pairs(self):
+        """No duplicate groups when no pairs found."""
+        store, db, conn, cursor, embedder = _make_store()
+        cursor.fetchall.return_value = []
+        groups = store.find_duplicate_groups(threshold=0.90)
+        assert groups == []
+
+    def test_groups_single_pair(self):
+        """Two similar memories form one group."""
+        store, db, conn, cursor, embedder = _make_store()
+        # First fetchall: the self-join pairs query
+        # Second fetchall (from the group detail query): the full records
+        cursor.fetchall.side_effect = [
+            [{"id1": 1, "id2": 2}],  # pairs
+            [  # full records for group
+                {"id": 1, "content": "User likes Python", "metadata": {"tags": ["auto"]}, "created_at": "2026-01-01"},
+                {"id": 2, "content": "User prefers Python", "metadata": {"tags": ["auto"]}, "created_at": "2026-01-02"},
+            ],
+        ]
+        groups = store.find_duplicate_groups(threshold=0.90)
+        assert len(groups) == 1
+        assert len(groups[0]) == 2
+        assert groups[0][0]["id"] == 1
+        assert groups[0][1]["id"] == 2
+
+    def test_groups_transitive_cluster(self):
+        """Three memories connected transitively form one group."""
+        store, db, conn, cursor, embedder = _make_store()
+        cursor.fetchall.side_effect = [
+            [{"id1": 1, "id2": 2}, {"id1": 2, "id2": 3}],  # pairs
+            [  # full records for group
+                {"id": 1, "content": "A", "metadata": {}, "created_at": "t"},
+                {"id": 2, "content": "B", "metadata": {}, "created_at": "t"},
+                {"id": 3, "content": "C", "metadata": {}, "created_at": "t"},
+            ],
+        ]
+        groups = store.find_duplicate_groups(threshold=0.90)
+        assert len(groups) == 1
+        assert len(groups[0]) == 3
+
+    def test_multiple_independent_groups(self):
+        """Two independent pairs form two separate groups."""
+        store, db, conn, cursor, embedder = _make_store()
+        cursor.fetchall.side_effect = [
+            [{"id1": 1, "id2": 2}, {"id1": 10, "id2": 11}],  # pairs
+            # Group 1 records
+            [
+                {"id": 1, "content": "A", "metadata": {}, "created_at": "t"},
+                {"id": 2, "content": "B", "metadata": {}, "created_at": "t"},
+            ],
+            # Group 2 records
+            [
+                {"id": 10, "content": "X", "metadata": {}, "created_at": "t"},
+                {"id": 11, "content": "Y", "metadata": {}, "created_at": "t"},
+            ],
+        ]
+        groups = store.find_duplicate_groups(threshold=0.90)
+        assert len(groups) == 2

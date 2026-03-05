@@ -1,20 +1,30 @@
 """Memory tool for the agent to store and search semantic memories."""
 
+from __future__ import annotations
+
 import json
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from src.memory import MemoryStore
 from src.tools.base import Tool
+
+if TYPE_CHECKING:
+    from src.auto_memory import AutoMemory
 
 
 class MemoryTool(Tool):
     """Tool that gives the LLM access to persistent semantic memory.
 
-    Supports three actions: store, search, and delete.
+    Supports four actions: store, search, delete, and cleanup.
     """
 
-    def __init__(self, memory_store: MemoryStore) -> None:
+    def __init__(
+        self,
+        memory_store: MemoryStore,
+        auto_memory: AutoMemory | None = None,
+    ) -> None:
         self._store = memory_store
+        self._auto_memory = auto_memory
 
     @property
     def name(self) -> str:
@@ -29,19 +39,21 @@ class MemoryTool(Tool):
                 "description": (
                     "Persistent semantic memory. Use this to store important "
                     "information for later retrieval, search past memories by "
-                    "meaning, or delete memories that are no longer needed."
+                    "meaning, delete memories that are no longer needed, or "
+                    "clean up near-duplicate memories."
                 ),
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "action": {
                             "type": "string",
-                            "enum": ["store", "search", "delete"],
+                            "enum": ["store", "search", "delete", "cleanup"],
                             "description": (
                                 "The action to perform: "
                                 "'store' to save new information, "
                                 "'search' to find relevant memories, "
-                                "'delete' to remove a memory by ID."
+                                "'delete' to remove a memory by ID, "
+                                "'cleanup' to find and merge near-duplicate memories."
                             ),
                         },
                         "content": {
@@ -66,6 +78,13 @@ class MemoryTool(Tool):
                             "type": "integer",
                             "description": "Number of results for 'search' (default 5).",
                         },
+                        "threshold": {
+                            "type": "number",
+                            "description": (
+                                "Similarity threshold for 'cleanup' (default 0.90). "
+                                "Memories above this threshold are considered duplicates."
+                            ),
+                        },
                     },
                     "required": ["action"],
                 },
@@ -83,6 +102,8 @@ class MemoryTool(Tool):
                 return self._search_action(kwargs)
             elif action == "delete":
                 return self._delete_action(kwargs)
+            elif action == "cleanup":
+                return self._cleanup_action(kwargs)
             else:
                 return json.dumps({"error": f"Unknown action: {action}"})
         except Exception as exc:
@@ -121,3 +142,22 @@ class MemoryTool(Tool):
 
         deleted = self._store.delete(memory_id=int(memory_id))
         return json.dumps({"deleted": deleted, "memory_id": memory_id})
+
+    def _cleanup_action(self, kwargs: dict) -> str:
+        if self._auto_memory is None:
+            return json.dumps({"error": "cleanup requires auto_memory to be configured"})
+
+        threshold = kwargs.get("threshold", 0.90)
+        results = self._auto_memory.cleanup_duplicates(threshold=threshold)
+        return json.dumps({
+            "groups_merged": len(results),
+            "total_deleted": sum(len(r["deleted_ids"]) for r in results),
+            "merges": [
+                {
+                    "merged_id": r["merged_id"],
+                    "deleted_ids": r["deleted_ids"],
+                    "content": r["content"][:200],
+                }
+                for r in results
+            ],
+        }, ensure_ascii=False)

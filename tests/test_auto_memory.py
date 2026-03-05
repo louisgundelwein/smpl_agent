@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.auto_memory import AutoMemory, MIN_MESSAGES_FOR_SUMMARY
-from src.events import AutoMemoryStoredEvent, EventEmitter
+from src.events import AutoMemoryStoredEvent, EventEmitter, MemoryCleanupEvent
 
 
 # --- Helpers ---
@@ -311,3 +311,113 @@ class TestFormatMessages:
         ]
         result = _format_messages_for_llm(messages)
         assert "...[truncated]..." in result
+
+
+# --- cleanup_duplicates() tests ---
+
+
+class TestCleanupDuplicates:
+    def test_cleanup_skips_when_no_duplicates(self, auto_mem, mock_memory):
+        """Returns empty when no duplicate groups found."""
+        mock_memory.find_duplicate_groups.return_value = []
+        results = auto_mem.cleanup_duplicates(threshold=0.90)
+        assert results == []
+        mock_memory.add.assert_not_called()
+
+    def test_cleanup_merges_duplicate_group(self, auto_mem, mock_llm, mock_memory):
+        """Merges a group of duplicates and deletes originals."""
+        mock_memory.find_duplicate_groups.return_value = [
+            [
+                {"id": 1, "content": "User likes Python", "tags": ["auto"], "created_at": "t"},
+                {"id": 2, "content": "User prefers Python for scripting", "tags": ["auto"], "created_at": "t"},
+            ]
+        ]
+        mock_llm.chat.return_value = _make_llm_response(
+            "User prefers Python, especially for scripting tasks."
+        )
+        mock_memory.add.return_value = 10
+        mock_memory.delete.return_value = True
+
+        results = auto_mem.cleanup_duplicates(threshold=0.90)
+
+        assert len(results) == 1
+        assert results[0]["merged_id"] == 10
+        assert results[0]["deleted_ids"] == [1, 2]
+        assert "Python" in results[0]["content"]
+        # Verify LLM was called to merge
+        mock_llm.chat.assert_called_once()
+        # Verify originals were deleted
+        assert mock_memory.delete.call_count == 2
+
+    def test_cleanup_preserves_unique_tags(self, auto_mem, mock_llm, mock_memory):
+        """Tags from all group members are merged."""
+        mock_memory.find_duplicate_groups.return_value = [
+            [
+                {"id": 1, "content": "A", "tags": ["auto", "preference"], "created_at": "t"},
+                {"id": 2, "content": "B", "tags": ["auto", "project"], "created_at": "t"},
+            ]
+        ]
+        mock_llm.chat.return_value = _make_llm_response("Merged A and B.")
+        mock_memory.add.return_value = 10
+        mock_memory.delete.return_value = True
+
+        auto_mem.cleanup_duplicates()
+
+        add_call = mock_memory.add.call_args
+        tags = add_call.kwargs["tags"]
+        assert "auto" in tags
+        assert "merged" in tags
+        assert "preference" in tags
+        assert "project" in tags
+
+    def test_cleanup_handles_llm_error(self, auto_mem, mock_llm, mock_memory):
+        """LLM error skips the group but doesn't crash."""
+        mock_memory.find_duplicate_groups.return_value = [
+            [
+                {"id": 1, "content": "A", "tags": [], "created_at": "t"},
+                {"id": 2, "content": "B", "tags": [], "created_at": "t"},
+            ]
+        ]
+        mock_llm.chat.side_effect = RuntimeError("API down")
+
+        results = auto_mem.cleanup_duplicates()
+        assert results == []
+        mock_memory.add.assert_not_called()
+
+    def test_cleanup_handles_find_error(self, auto_mem, mock_memory):
+        """DB error in find_duplicate_groups returns empty."""
+        mock_memory.find_duplicate_groups.side_effect = RuntimeError("DB error")
+        results = auto_mem.cleanup_duplicates()
+        assert results == []
+
+    def test_cleanup_emits_event(self, mock_llm, mock_memory):
+        """MemoryCleanupEvent emitted after successful cleanup."""
+        events = []
+        emitter = EventEmitter()
+        emitter.on(lambda e: events.append(e))
+        am = AutoMemory(llm=mock_llm, memory=mock_memory, emitter=emitter)
+
+        mock_memory.find_duplicate_groups.return_value = [
+            [
+                {"id": 1, "content": "A", "tags": [], "created_at": "t"},
+                {"id": 2, "content": "B", "tags": [], "created_at": "t"},
+            ]
+        ]
+        mock_llm.chat.return_value = _make_llm_response("Merged AB.")
+        mock_memory.add.return_value = 10
+        mock_memory.delete.return_value = True
+
+        am.cleanup_duplicates()
+
+        cleanup_events = [e for e in events if isinstance(e, MemoryCleanupEvent)]
+        assert len(cleanup_events) == 1
+        assert cleanup_events[0].groups_merged == 1
+        assert cleanup_events[0].memories_deleted == 2
+
+    def test_conversation_end_triggers_cleanup(self, mock_llm, mock_memory):
+        """on_conversation_end calls cleanup_duplicates after summarizing."""
+        am = AutoMemory(llm=mock_llm, memory=mock_memory)
+        mock_memory.find_duplicate_groups.return_value = []
+        am.on_conversation_end(_build_messages(3))
+        # Verify find_duplicate_groups was called (cleanup ran)
+        mock_memory.find_duplicate_groups.assert_called_once()

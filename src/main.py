@@ -8,6 +8,7 @@ from pathlib import Path
 
 from src.agent import SYSTEM_PROMPT, Agent
 from src.auto_memory import AutoMemory
+from src.auto_recall import AutoRecall
 from src.config import Config
 from src.context import ContextManager
 from src.db import Database
@@ -19,17 +20,19 @@ from src.llm import LLMClient
 from src.memory import MemoryStore
 from src.calendar_store import CalendarConnectionStore
 from src.email_store import EmailAccountStore
-from src.hyperliquid_store import HyperliquidStore
+from src.marketing_store import MarketingStore
 from src.repos import RepoStore
 from src.scheduler import Scheduler, SchedulerStore
 from src.subagent import SubagentManager
 from src.tools import (
     BraveSearchTool,
+    BrowserTool,
     CalendarTool,
     CodexTool,
     EmailTool,
     GitHubTool,
-    HyperliquidTool,
+    LinkedInTool,
+    MarketingTool,
     MemoryTool,
     ReposTool,
     SchedulerTool,
@@ -107,7 +110,7 @@ def create_agent(
     repo_store: RepoStore | None = None,
     calendar_store: CalendarConnectionStore | None = None,
     email_store: EmailAccountStore | None = None,
-    hyperliquid_store: HyperliquidStore | None = None,
+    marketing_store: MarketingStore | None = None,
     memory_store: MemoryStore | None = None,
 ) -> Agent:
     """Wire up all components and return a configured Agent."""
@@ -130,9 +133,20 @@ def create_agent(
             dimensions=config.embedding_dimensions,
         )
 
+    # Create auto_memory early so MemoryTool can reference it for cleanup.
+    emitter = EventEmitter()
+    auto_memory = None
+    if config.auto_memory:
+        auto_memory = AutoMemory(
+            llm=llm,
+            memory=memory_store,
+            emitter=emitter,
+            extract_interval=config.auto_memory_extract_interval,
+        )
+
     registry = ToolRegistry()
     registry.register(BraveSearchTool(api_key=config.brave_search_api_key))
-    registry.register(MemoryTool(memory_store=memory_store))
+    registry.register(MemoryTool(memory_store=memory_store, auto_memory=auto_memory))
     registry.register(ShellTool(
         command_timeout=config.shell_command_timeout,
         max_output=config.shell_max_output,
@@ -154,21 +168,43 @@ def create_agent(
         registry.register(CalendarTool(store=calendar_store))
     if email_store:
         registry.register(EmailTool(store=email_store))
-    if hyperliquid_store and config.hyperliquid_wallet_key and config.hyperliquid_wallet_address:
-        registry.register(HyperliquidTool(
-            store=hyperliquid_store,
-            wallet_key=config.hyperliquid_wallet_key,
-            wallet_address=config.hyperliquid_wallet_address,
-            testnet=config.hyperliquid_testnet,
-            max_position_size_usd=config.hyperliquid_max_position_usd,
-            max_loss_usd=config.hyperliquid_max_loss_usd,
-            max_leverage=config.hyperliquid_max_leverage,
-            scheduler_store=scheduler_store,
+    if marketing_store and config.marketing_enabled:
+        registry.register(MarketingTool(
+            store=marketing_store,
+            openai_api_key=config.openai_api_key,
+            openai_model=config.openai_model,
+            openai_base_url=config.openai_base_url,
+            browser_timeout=config.browser_use_timeout,
+        ))
+    if marketing_store and config.linkedin_enabled:
+        from src.marketing.platform_knowledge import PlatformKnowledge
+        from src.marketing.linkedin import LinkedInAdapter as _LinkedInAdapter
+
+        knowledge = PlatformKnowledge(
+            knowledge_dir=Path(config.linkedin_knowledge_dir),
+            db=db,
+        )
+        linkedin_adapter = _LinkedInAdapter(knowledge)
+        registry.register(LinkedInTool(
+            store=marketing_store,
+            knowledge=knowledge,
+            adapter=linkedin_adapter,
+            openai_api_key=config.openai_api_key,
+            openai_model=config.openai_model,
+            openai_base_url=config.openai_base_url,
+            timeout=config.browser_use_timeout,
+            action_delay=config.linkedin_action_delay,
+        ))
+    if config.browser_use_enabled:
+        registry.register(BrowserTool(
+            openai_api_key=config.openai_api_key,
+            openai_model=config.openai_model,
+            openai_base_url=config.openai_base_url,
+            recording_dir=config.browser_use_recording_dir,
+            timeout=config.browser_use_timeout,
         ))
 
-    # Subagent system: factory creates isolated agents for subtasks
-    emitter = EventEmitter()
-
+    # Subagent system: subagents get all tools except SubagentTool (no recursion)
     def _subagent_factory(task: str) -> Agent:
         sub_llm = LLMClient(
             api_key=config.openai_api_key,
@@ -176,16 +212,9 @@ def create_agent(
             base_url=config.openai_base_url,
         )
         sub_registry = ToolRegistry()
-        sub_registry.register(BraveSearchTool(api_key=config.brave_search_api_key))
-        sub_registry.register(ShellTool(
-            command_timeout=config.shell_command_timeout,
-            max_output=config.shell_max_output,
-        ))
-        if config.github_token:
-            sub_registry.register(GitHubTool(
-                token=config.github_token,
-                max_output=config.shell_max_output,
-            ))
+        for tool in registry.tools:
+            if tool.name != "subagent":
+                sub_registry.register(tool)
         sub_prompt = (
             "You are a focused sub-agent working on a specific task. "
             "Complete the task thoroughly and return a clear, concise result. "
@@ -213,14 +242,12 @@ def create_agent(
     )
     history = ConversationHistory(db)
 
-    auto_memory = None
-    if config.auto_memory:
-        auto_memory = AutoMemory(
-            llm=llm,
-            memory=memory_store,
-            emitter=emitter,
-            extract_interval=config.auto_memory_extract_interval,
-        )
+    auto_recall = AutoRecall(
+        memory=memory_store,
+        emitter=emitter,
+        threshold=config.auto_recall_threshold,
+        top_k=config.auto_recall_top_k,
+    )
 
     system_prompt = _load_system_prompt(config.soul_path) + _build_system_context()
     if repo_store:
@@ -237,6 +264,7 @@ def create_agent(
         emitter=emitter,
         subagent_manager=subagent_manager,
         auto_memory=auto_memory,
+        auto_recall=auto_recall,
     )
 
 
@@ -306,6 +334,7 @@ def _load_static_tasks(scheduler_store: SchedulerStore, raw: str) -> None:
 def serve(config: Config) -> None:
     """Start the agent daemon server."""
     import signal as _signal
+    import threading
 
     from src.server import AgentServer
     from src.telegram import TelegramBot
@@ -319,7 +348,7 @@ def serve(config: Config) -> None:
     repo_store = RepoStore(db=db)
     calendar_store = CalendarConnectionStore(db=db)
     email_store = EmailAccountStore(db=db)
-    hyperliquid_store = HyperliquidStore(db=db) if config.hyperliquid_wallet_key else None
+    marketing_store = MarketingStore(db=db) if config.marketing_enabled else None
 
     # Load static scheduled tasks from config
     _load_static_tasks(scheduler_store, config.scheduler_tasks)
@@ -344,10 +373,23 @@ def serve(config: Config) -> None:
         repo_store=repo_store,
         calendar_store=calendar_store,
         email_store=email_store,
-        hyperliquid_store=hyperliquid_store,
+        marketing_store=marketing_store,
         memory_store=memory_store,
     )
     agent.emitter.on(_print_event)
+
+    if config.browser_use_enabled:
+        from src.temp_files import TempFileManager
+
+        temp_manager = TempFileManager(
+            directory=config.browser_use_recording_dir,
+            ttl_hours=config.temp_file_ttl_hours,
+        )
+        cleanup_thread = threading.Thread(
+            target=temp_manager.cleanup_loop, daemon=True,
+        )
+        cleanup_thread.start()
+        print(f"Browser recording cleanup started (dir={config.browser_use_recording_dir}, ttl={config.temp_file_ttl_hours}h)")
 
     telegram_bot = None
     telegram_send = None
@@ -496,7 +538,7 @@ def main() -> None:
         repo_store = RepoStore(db=db)
         calendar_store = CalendarConnectionStore(db=db)
         email_store = EmailAccountStore(db=db)
-        hyperliquid_store = HyperliquidStore(db=db) if config.hyperliquid_wallet_key else None
+        marketing_store = MarketingStore(db=db) if config.marketing_enabled else None
         _load_static_tasks(scheduler_store, config.scheduler_tasks)
         agent = create_agent(
             config,
@@ -505,7 +547,7 @@ def main() -> None:
             repo_store=repo_store,
             calendar_store=calendar_store,
             email_store=email_store,
-            hyperliquid_store=hyperliquid_store,
+            marketing_store=marketing_store,
         )
         repl(agent, db)
 

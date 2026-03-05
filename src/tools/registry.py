@@ -36,6 +36,11 @@ class ToolRegistry:
         return self._tools[tool_name].execute(**kwargs)
 
     @property
+    def tools(self) -> list[Tool]:
+        """List of registered tool instances."""
+        return list(self._tools.values())
+
+    @property
     def tool_names(self) -> list[str]:
         """List of registered tool names."""
         return list(self._tools.keys())

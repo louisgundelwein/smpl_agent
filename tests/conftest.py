@@ -69,14 +69,15 @@ def mock_config():
         scheduler_tasks="",
         max_subagents=10,
         subagent_tool_rounds=15,
-        hyperliquid_wallet_key=None,
-        hyperliquid_wallet_address=None,
-        hyperliquid_testnet=True,
-        hyperliquid_max_position_usd=10000.0,
-        hyperliquid_max_loss_usd=1000.0,
-        hyperliquid_max_leverage=20,
         auto_memory=True,
         auto_memory_extract_interval=3,
+        auto_recall_threshold=0.55,
+        auto_recall_top_k=5,
+        browser_use_enabled=False,
+        browser_use_timeout=300,
+        browser_use_recording_dir="test_browser_recordings",
+        temp_file_ttl_hours=72,
+        marketing_enabled=False,
     )
 
 

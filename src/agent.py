@@ -5,6 +5,7 @@ import time
 from typing import Any
 
 from src.auto_memory import AutoMemory
+from src.auto_recall import AutoRecall
 from src.context import ContextManager
 from src.history import ConversationHistory
 from src.events import (
@@ -69,6 +70,7 @@ class Agent:
         history: ConversationHistory | None = None,
         subagent_manager: SubagentManager | None = None,
         auto_memory: AutoMemory | None = None,
+        auto_recall: AutoRecall | None = None,
     ) -> None:
         self._llm = llm
         self._registry = registry
@@ -79,6 +81,7 @@ class Agent:
         self._history = history
         self._subagent_manager = subagent_manager
         self._auto_memory = auto_memory
+        self._auto_recall = auto_recall
 
         # Load persisted conversation or start fresh.
         # Always replace the system prompt with the current one
@@ -116,6 +119,13 @@ class Agent:
             RuntimeError: If execution exceeds maximum rounds.
         """
         self._messages.append({"role": "user", "content": user_input})
+
+        # Proactive memory recall: search for relevant memories and
+        # inject them as context before the first LLM call.
+        if self._auto_recall:
+            recall_context = self._auto_recall.recall(user_input)
+            if recall_context:
+                self._messages.append({"role": "user", "content": recall_context})
 
         tool_schemas = self._registry.get_schemas()
 

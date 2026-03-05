@@ -4,7 +4,7 @@ import logging
 import threading
 from typing import Any
 
-from src.events import AutoMemoryStoredEvent, EventEmitter
+from src.events import AutoMemoryStoredEvent, EventEmitter, MemoryCleanupEvent
 from src.llm import LLMClient
 from src.memory import MemoryStore
 
@@ -29,6 +29,13 @@ CONVERSATION_SUMMARY_PROMPT = (
     "- Any unresolved issues or next steps\n\n"
     "Write a concise summary (3-8 sentences). "
     "Do NOT include greetings, filler, or meta-commentary about the summary itself."
+)
+
+MEMORY_MERGE_PROMPT = (
+    "You are given a group of very similar memories that overlap in meaning. "
+    "Merge them into a single, comprehensive memory that preserves ALL unique "
+    "information from each. Be concise but complete — one or two sentences. "
+    "Return ONLY the merged memory text, nothing else."
 )
 
 FACT_EXTRACTION_PROMPT = (
@@ -103,6 +110,12 @@ class AutoMemory:
         except Exception:
             logger.exception("Auto-memory: failed to summarize conversation")
 
+        # Run dedup cleanup after storing the summary.
+        try:
+            self.cleanup_duplicates()
+        except Exception:
+            logger.exception("Auto-memory: cleanup failed during conversation end")
+
         # Reset turn counter for the new conversation.
         self._turn_count = 0
 
@@ -129,6 +142,95 @@ class AutoMemory:
             daemon=True,
         )
         self._bg_thread.start()
+
+    def cleanup_duplicates(
+        self, threshold: float = 0.90
+    ) -> list[dict[str, Any]]:
+        """Find and merge near-duplicate memory groups.
+
+        For each group of similar memories (above *threshold*), uses the
+        LLM to merge them into a single comprehensive memory, stores the
+        merged version, and deletes the originals.
+
+        Returns:
+            List of merge result dicts, each with keys:
+            merged_id, deleted_ids, content.
+        """
+        try:
+            groups = self._memory.find_duplicate_groups(threshold=threshold)
+        except Exception:
+            logger.exception("Memory cleanup: failed to find duplicate groups")
+            return []
+
+        if not groups:
+            return []
+
+        results: list[dict[str, Any]] = []
+        total_deleted = 0
+
+        for group in groups:
+            try:
+                merged_text = self._merge_group(group)
+                if not merged_text:
+                    continue
+
+                # Collect unique tags from all members.
+                all_tags: set[str] = {"auto", "merged"}
+                for mem in group:
+                    for tag in mem.get("tags", []):
+                        all_tags.add(tag)
+
+                merged_id = self._memory.add(
+                    content=merged_text, tags=sorted(all_tags)
+                )
+
+                # Delete originals.
+                deleted_ids = []
+                for mem in group:
+                    if self._memory.delete(mem["id"]):
+                        deleted_ids.append(mem["id"])
+
+                total_deleted += len(deleted_ids)
+                results.append({
+                    "merged_id": merged_id,
+                    "deleted_ids": deleted_ids,
+                    "content": merged_text,
+                })
+
+                logger.info(
+                    "Memory cleanup: merged %d memories into id=%s",
+                    len(deleted_ids),
+                    merged_id,
+                )
+            except Exception:
+                logger.exception(
+                    "Memory cleanup: failed to merge group (ids=%s)",
+                    [m["id"] for m in group],
+                )
+
+        if results:
+            self._emitter.emit(
+                MemoryCleanupEvent(
+                    groups_merged=len(results),
+                    memories_deleted=total_deleted,
+                )
+            )
+
+        return results
+
+    def _merge_group(self, group: list[dict[str, Any]]) -> str | None:
+        """Use LLM to merge a group of similar memories into one."""
+        memories_text = "\n".join(
+            f"- {mem['content']}" for mem in group
+        )
+        response = self._llm.chat(
+            messages=[
+                {"role": "system", "content": MEMORY_MERGE_PROMPT},
+                {"role": "user", "content": memories_text},
+            ]
+        )
+        text = (response.choices[0].message.content or "").strip()
+        return text if text else None
 
     def shutdown(self) -> None:
         """Signal background thread to stop and wait briefly."""

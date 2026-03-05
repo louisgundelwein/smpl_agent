@@ -1,8 +1,10 @@
 """Telegram Bot integration using httpx directly (no extra dependencies)."""
 
+import json as _json
 import logging
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -103,6 +105,47 @@ class TelegramBot:
             except Exception as exc:
                 logger.error("sendMessage exception: %s", exc)
                 print(f"  [telegram] sendMessage exception: {exc}")
+
+    def send_video(
+        self, chat_id: int, video_path: str, caption: str | None = None,
+    ) -> None:
+        """Send a video file to a Telegram chat."""
+        url = f"{self._base_url}/sendVideo"
+        try:
+            with open(video_path, "rb") as f:
+                files = {"video": (Path(video_path).name, f, "video/webm")}
+                data: dict[str, Any] = {"chat_id": str(chat_id)}
+                if caption:
+                    data["caption"] = caption[:1024]
+                resp = httpx.post(url, data=data, files=files, timeout=120.0)
+                if not resp.is_success:
+                    logger.error(
+                        "sendVideo failed (HTTP %s): %s",
+                        resp.status_code, resp.text[:500],
+                    )
+                    print(f"  [telegram] sendVideo failed (HTTP {resp.status_code})")
+        except FileNotFoundError:
+            logger.error("Recording file not found: %s", video_path)
+        except Exception as exc:
+            logger.error("sendVideo exception: %s", exc)
+            print(f"  [telegram] sendVideo exception: {exc}")
+
+    def _send_browser_recordings(self, agent: Any, chat_id: int) -> None:
+        """Check recent tool results for browser recordings and send them."""
+        for msg in reversed(agent.messages):
+            if msg.get("role") == "user":
+                break
+            if msg.get("role") != "tool":
+                continue
+            # tool_call results may have a "name" field or not; check content
+            try:
+                data = _json.loads(msg.get("content", ""))
+            except (ValueError, TypeError):
+                continue
+            path = data.get("recording_path")
+            if path and Path(path).exists():
+                self.send_video(chat_id, path, caption="Browser session recording")
+                print(f"  [telegram] sent browser recording to chat {chat_id}")
 
     @classmethod
     def _split_message(cls, text: str) -> list[str]:
@@ -228,6 +271,7 @@ class TelegramBot:
             agent_lock.release()
 
         self.send_message(chat_id, response, reply_to_message_id=msg_id)
+        self._send_browser_recordings(agent, chat_id)
         print(f"  [telegram] replied to chat {chat_id}")
 
     # ---- Slash command handling ----
@@ -387,6 +431,7 @@ class TelegramBot:
                         agent_lock.release()
 
                     self.send_message(chat_id, response, reply_to_message_id=msg_id)
+                    self._send_browser_recordings(agent, chat_id)
                     print(f"  [telegram] replied to chat {chat_id}")
 
             except Exception as exc:

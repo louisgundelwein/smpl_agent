@@ -110,6 +110,23 @@ class ContinuationEvent:
 
 
 @dataclass(frozen=True)
+class MemoryRecallEvent:
+    """Emitted when auto-recall injects memories into context."""
+
+    count: int
+    top_score: float
+    duration_ms: int
+
+
+@dataclass(frozen=True)
+class MemoryCleanupEvent:
+    """Emitted when memory cleanup merges duplicate groups."""
+
+    groups_merged: int
+    memories_deleted: int
+
+
+@dataclass(frozen=True)
 class RunSummaryEvent:
     """Emitted when a run() call completes successfully."""
 
@@ -131,6 +148,8 @@ AgentEvent = (
     | SubagentWaitEvent
     | SubagentResultsCollectedEvent
     | AutoMemoryStoredEvent
+    | MemoryRecallEvent
+    | MemoryCleanupEvent
     | ContinuationEvent
     | RunSummaryEvent
 )

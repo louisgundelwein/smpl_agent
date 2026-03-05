@@ -38,14 +38,18 @@ class Config:
     scheduler_tasks: str
     max_subagents: int
     subagent_tool_rounds: int
-    hyperliquid_wallet_key: str | None
-    hyperliquid_wallet_address: str | None
-    hyperliquid_testnet: bool
-    hyperliquid_max_position_usd: float
-    hyperliquid_max_loss_usd: float
-    hyperliquid_max_leverage: int
     auto_memory: bool
     auto_memory_extract_interval: int
+    auto_recall_threshold: float
+    auto_recall_top_k: int
+    browser_use_enabled: bool
+    browser_use_timeout: int
+    browser_use_recording_dir: str
+    temp_file_ttl_hours: int
+    marketing_enabled: bool
+    linkedin_enabled: bool
+    linkedin_action_delay: int
+    linkedin_knowledge_dir: str
 
     @classmethod
     def from_env(cls, env_path: str = ".env") -> "Config":
@@ -96,14 +100,18 @@ class Config:
         scheduler_tasks = os.getenv("SCHEDULER_TASKS", "")
         max_subagents = int(os.getenv("MAX_SUBAGENTS", "10"))
         subagent_tool_rounds = int(os.getenv("SUBAGENT_TOOL_ROUNDS", "15"))
-        hyperliquid_wallet_key = os.getenv("HYPERLIQUID_WALLET_KEY") or None
-        hyperliquid_wallet_address = os.getenv("HYPERLIQUID_WALLET_ADDRESS") or None
-        hyperliquid_testnet = os.getenv("HYPERLIQUID_TESTNET", "true").lower() in ("true", "1", "yes")
-        hyperliquid_max_position_usd = float(os.getenv("HYPERLIQUID_MAX_POSITION_USD", "10000"))
-        hyperliquid_max_loss_usd = float(os.getenv("HYPERLIQUID_MAX_LOSS_USD", "1000"))
-        hyperliquid_max_leverage = int(os.getenv("HYPERLIQUID_MAX_LEVERAGE", "20"))
         auto_memory = os.getenv("AUTO_MEMORY", "true").lower() in ("true", "1", "yes")
         auto_memory_extract_interval = int(os.getenv("AUTO_MEMORY_EXTRACT_INTERVAL", "3"))
+        auto_recall_threshold = float(os.getenv("AUTO_RECALL_THRESHOLD", "0.55"))
+        auto_recall_top_k = int(os.getenv("AUTO_RECALL_TOP_K", "5"))
+        browser_use_enabled = os.getenv("BROWSER_USE_ENABLED", "false").lower() in ("true", "1", "yes")
+        browser_use_timeout = int(os.getenv("BROWSER_USE_TIMEOUT", "300"))
+        browser_use_recording_dir = os.getenv("BROWSER_USE_RECORDING_DIR", "browser_recordings")
+        temp_file_ttl_hours = int(os.getenv("TEMP_FILE_TTL_HOURS", "72"))
+        marketing_enabled = os.getenv("MARKETING_ENABLED", "false").lower() in ("true", "1", "yes")
+        linkedin_enabled = os.getenv("LINKEDIN_ENABLED", "false").lower() in ("true", "1", "yes")
+        linkedin_action_delay = int(os.getenv("LINKEDIN_ACTION_DELAY_SECONDS", "2"))
+        linkedin_knowledge_dir = os.getenv("LINKEDIN_KNOWLEDGE_DIR", "src/marketing/platform_guides")
 
         if not openai_key:
             raise ValueError("OPENAI_API_KEY is required")
@@ -141,12 +149,16 @@ class Config:
             scheduler_tasks=scheduler_tasks,
             max_subagents=max_subagents,
             subagent_tool_rounds=subagent_tool_rounds,
-            hyperliquid_wallet_key=hyperliquid_wallet_key,
-            hyperliquid_wallet_address=hyperliquid_wallet_address,
-            hyperliquid_testnet=hyperliquid_testnet,
-            hyperliquid_max_position_usd=hyperliquid_max_position_usd,
-            hyperliquid_max_loss_usd=hyperliquid_max_loss_usd,
-            hyperliquid_max_leverage=hyperliquid_max_leverage,
             auto_memory=auto_memory,
             auto_memory_extract_interval=auto_memory_extract_interval,
+            auto_recall_threshold=auto_recall_threshold,
+            auto_recall_top_k=auto_recall_top_k,
+            browser_use_enabled=browser_use_enabled,
+            browser_use_timeout=browser_use_timeout,
+            browser_use_recording_dir=browser_use_recording_dir,
+            temp_file_ttl_hours=temp_file_ttl_hours,
+            marketing_enabled=marketing_enabled,
+            linkedin_enabled=linkedin_enabled,
+            linkedin_action_delay=linkedin_action_delay,
+            linkedin_knowledge_dir=linkedin_knowledge_dir,
         )
