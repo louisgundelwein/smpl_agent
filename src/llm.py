@@ -1,9 +1,12 @@
 """OpenAI LLM client wrapper."""
 
+import time
 from typing import Any
 
 from openai import OpenAI
 from openai.types.chat import ChatCompletion
+from httpx import ConnectError, TimeoutException
+from openai import APIConnectionError, RateLimitError, APIStatusError
 
 
 class LLMClient:
@@ -11,8 +14,14 @@ class LLMClient:
 
     _KNOWN_FIELDS = frozenset({"role", "content", "tool_calls", "tool_call_id", "name"})
 
-    def __init__(self, api_key: str, model: str, base_url: str | None = None) -> None:
-        self._client = OpenAI(api_key=api_key, base_url=base_url)
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        base_url: str | None = None,
+        timeout: int = 120,
+    ) -> None:
+        self._client = OpenAI(api_key=api_key, base_url=base_url, timeout=timeout)
         self._model = model
 
     @property
@@ -24,11 +33,14 @@ class LLMClient:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
     ) -> ChatCompletion:
-        """Send a chat completion request.
+        """Send a chat completion request with exponential backoff retry.
 
         Args:
             messages: The conversation messages list.
             tools: Optional list of tool schemas.
+
+        Raises:
+            Exception: After 3 failed attempts with backoff.
         """
         kwargs: dict[str, Any] = {
             "model": self._model,
@@ -38,7 +50,29 @@ class LLMClient:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
 
-        return self._client.chat.completions.create(**kwargs)
+        max_attempts = 3
+        delay = 1  # Start with 1 second
+        for attempt in range(max_attempts):
+            try:
+                return self._client.chat.completions.create(**kwargs)
+            except (
+                ConnectError,
+                TimeoutException,
+                APIConnectionError,
+                RateLimitError,
+                APIStatusError,
+            ) as e:
+                # Retry on transient errors: network, timeouts, 429, 500, 502, 503
+                if isinstance(e, APIStatusError):
+                    # Only retry on server errors and rate limit
+                    if e.status_code not in (429, 500, 502, 503):
+                        raise
+
+                if attempt == max_attempts - 1:
+                    raise
+
+                time.sleep(delay)
+                delay *= 2  # Exponential backoff
 
     @staticmethod
     def _sanitize_messages(

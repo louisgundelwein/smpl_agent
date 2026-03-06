@@ -66,7 +66,7 @@ class BraveSearchTool(Tool):
             self._last_request_time = time.monotonic()
 
     def execute(self, **kwargs: Any) -> str:
-        """Execute a Brave web search.
+        """Execute a Brave web search with exponential backoff retry.
 
         Args:
             query: The search query.
@@ -77,31 +77,59 @@ class BraveSearchTool(Tool):
 
         self._enforce_cooldown()
 
-        response = httpx.get(
-            self.ENDPOINT,
-            params={"q": query, "count": count},
-            headers={
-                "Accept": "application/json",
-                "Accept-Encoding": "gzip",
-                "X-Subscription-Token": self._api_key,
-            },
-            timeout=10.0,
-        )
+        # Exponential backoff retry (3 attempts, 1s initial delay)
+        max_attempts = 3
+        wait_time = 1
 
-        response.raise_for_status()
-        data = response.json()
+        for attempt in range(max_attempts):
+            try:
+                response = httpx.get(
+                    self.ENDPOINT,
+                    params={"q": query, "count": count},
+                    headers={
+                        "Accept": "application/json",
+                        "Accept-Encoding": "gzip",
+                        "X-Subscription-Token": self._api_key,
+                    },
+                    timeout=10.0,
+                )
 
-        results = []
-        for item in data.get("web", {}).get("results", []):
-            results.append(
-                {
-                    "title": item.get("title", ""),
-                    "url": item.get("url", ""),
-                    "description": item.get("description", ""),
-                }
-            )
+                # Handle 429 Too Many Requests with retry
+                if response.status_code == 429:
+                    if attempt < max_attempts - 1:
+                        time.sleep(wait_time)
+                        wait_time *= 2  # Exponential backoff
+                        continue
+                    else:
+                        return json.dumps({
+                            "error": "Rate limited (429)",
+                            "status_code": 429,
+                        })
 
-        if not results:
-            return json.dumps({"message": "No results found.", "results": []})
+                response.raise_for_status()
+                data = response.json()
 
-        return json.dumps({"results": results}, ensure_ascii=False)
+                results = []
+                for item in data.get("web", {}).get("results", []):
+                    results.append(
+                        {
+                            "title": item.get("title", ""),
+                            "url": item.get("url", ""),
+                            "description": item.get("description", ""),
+                        }
+                    )
+
+                if not results:
+                    return json.dumps(
+                        {"message": "No results found.", "results": []}
+                    )
+
+                return json.dumps({"results": results}, ensure_ascii=False)
+
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code != 429:
+                    raise
+                # 429 will be handled above
+                continue
+
+        return json.dumps({"error": "Failed to execute search after retries"})

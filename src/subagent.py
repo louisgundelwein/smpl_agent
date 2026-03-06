@@ -205,9 +205,14 @@ class SubagentManager:
             if state.thread is not None:
                 state.thread.join(timeout=timeout)
                 if state.thread.is_alive():
+                    state.cancel_flag.set()
                     state.status = SubagentStatus.FAILED
                     state.error = "Timed out waiting for completion"
                     state.completed_at = time.monotonic()
+                    logger.warning(
+                        "Subagent %s timed out; cancel flag set but thread still running",
+                        state.id
+                    )
 
         return [s.to_dict() for s in active]
 

@@ -56,11 +56,31 @@ class TelegramBot:
         return username
 
     def _api(self, method: str, **params: Any) -> dict[str, Any]:
-        """Call a Telegram Bot API method."""
+        """Call a Telegram Bot API method with exponential backoff retry."""
         url = f"{self._base_url}/{method}"
-        resp = httpx.get(url, params=params, timeout=60.0)
-        resp.raise_for_status()
-        return resp.json()
+        retry_delays = [1.0, 2.0, 4.0]
+
+        for attempt, delay in enumerate([0] + retry_delays):
+            if attempt > 0:
+                time.sleep(delay)
+            try:
+                resp = httpx.get(url, params=params, timeout=60.0)
+                resp.raise_for_status()
+                return resp.json()
+            except (httpx.TimeoutException, httpx.NetworkError) as exc:
+                if attempt >= len(retry_delays):
+                    raise
+                logger.debug(f"Telegram API {method} timeout/network error, retrying in {delay}s: {exc}")
+                continue
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code == 429:  # Rate limit
+                    if attempt >= len(retry_delays):
+                        logger.error(f"Telegram API {method} rate limited after retries")
+                        raise
+                    logger.debug(f"Telegram API {method} rate limited, retrying in {delay}s")
+                    continue
+                raise
+        return {}
 
     # Telegram rejects messages longer than this.
     _MAX_MESSAGE_LENGTH = 4096
@@ -385,8 +405,6 @@ class TelegramBot:
                 updates = data.get("result", [])
 
                 for update in updates:
-                    self._offset = update["update_id"] + 1
-
                     message = update.get("message")
                     if not message:
                         continue
@@ -395,20 +413,24 @@ class TelegramBot:
 
                     if not self._is_allowed(chat_id):
                         print(f"  [telegram] ignored message from chat {chat_id} (not in allowed list)")
+                        self._offset = update["update_id"] + 1
                         continue
 
                     if message.get("voice"):
                         self._handle_voice(message, chat_id, agent, agent_lock)
+                        self._offset = update["update_id"] + 1
                         continue
 
                     text = message.get("text", "").strip()
                     if not text:
+                        self._offset = update["update_id"] + 1
                         continue
 
                     print(f"  [telegram] message from chat {chat_id}: {text[:80]}")
 
                     if text.startswith("/"):
                         self._handle_command(text, chat_id, message.get("message_id"))
+                        self._offset = update["update_id"] + 1
                         continue
 
                     self._send_typing(chat_id)
@@ -421,6 +443,7 @@ class TelegramBot:
 
                     if not agent_lock.acquire(timeout=300):
                         self.send_message(chat_id, "Agent is busy, please try again later.", reply_to_message_id=msg_id)
+                        self._offset = update["update_id"] + 1
                         continue
                     try:
                         response = agent.run(text)
@@ -433,6 +456,7 @@ class TelegramBot:
                     self.send_message(chat_id, response, reply_to_message_id=msg_id)
                     self._send_browser_recordings(agent, chat_id)
                     print(f"  [telegram] replied to chat {chat_id}")
+                    self._offset = update["update_id"] + 1
 
             except Exception as exc:
                 consecutive_errors += 1

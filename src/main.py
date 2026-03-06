@@ -119,6 +119,7 @@ def create_agent(
         api_key=config.openai_api_key,
         model=config.openai_model,
         base_url=config.openai_base_url,
+        timeout=config.openai_timeout,
     )
 
     if memory_store is None:
@@ -198,6 +199,7 @@ def create_agent(
             browser_profiles_dir=config.browser_profiles_dir,
             email_store=email_store,
             browser_use_api_key=config.browser_use_api_key,
+            browser_stealth_mode=config.browser_stealth_mode,
         ))
     if marketing_store and config.reddit_enabled:
         from src.marketing.platform_knowledge import PlatformKnowledge as _PK
@@ -258,6 +260,7 @@ def create_agent(
             api_key=config.openai_api_key,
             model=config.openai_model,
             base_url=config.openai_base_url,
+            timeout=config.openai_timeout,
         )
         sub_registry = ToolRegistry()
         for tool in registry.tools:

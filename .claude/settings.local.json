@@ -55,7 +55,11 @@
       "Bash(git rm:*)",
       "Bash(python:*)",
       "WebFetch(domain:docs.browser-use.com)",
-      "WebFetch(domain:raw.githubusercontent.com)"
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(pip:*)",
+      "Bash(.venv/bin/pip install:*)",
+      "Bash(/usr/bin/python3:*)",
+      "Bash(git reset:*)"
     ]
   }
 }

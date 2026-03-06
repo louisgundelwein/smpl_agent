@@ -1,7 +1,10 @@
 """Event types and emitter for agent lifecycle notifications."""
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Callable
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -180,4 +183,4 @@ class EventEmitter:
             try:
                 listener(event)
             except Exception:
-                pass
+                logger.exception("Event listener error")

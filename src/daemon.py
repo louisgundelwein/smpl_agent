@@ -1,5 +1,7 @@
 """Daemon lifecycle management: start, stop, and status for background agent."""
 
+import logging
+import logging.handlers
 import os
 import signal
 import subprocess
@@ -100,10 +102,28 @@ def start_daemon(pid_path: str, log_path: str, host: str = "127.0.0.1", port: in
             f"Find the process with: lsof -i :{port}"
         )
 
-    log_dir = os.path.dirname(log_path)
-    if log_dir:
-        os.makedirs(log_dir, exist_ok=True)
-    log_file = open(log_path, "a", encoding="utf-8")
+    log_dir = os.path.dirname(log_path) or "."
+    os.makedirs(log_dir, exist_ok=True)
+
+    # Set up rotating file handler for the daemon subprocess
+    handler = logging.handlers.RotatingFileHandler(
+        log_path,
+        maxBytes=5 * 1024 * 1024,  # 5MB
+        backupCount=3,
+        encoding="utf-8",
+    )
+    formatter = logging.Formatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    )
+    handler.setFormatter(formatter)
+
+    # Configure the root logger with the rotating handler
+    root_logger = logging.getLogger()
+    root_logger.addHandler(handler)
+    root_logger.setLevel(logging.INFO)
+
+    # Get the file descriptor from the handler for subprocess output
+    log_file = handler.stream
 
     kwargs: dict = {
         "stdout": log_file,

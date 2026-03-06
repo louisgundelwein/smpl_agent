@@ -13,6 +13,7 @@ class Config:
     openai_api_key: str
     openai_model: str
     openai_base_url: str | None
+    openai_timeout: int
     brave_search_api_key: str
     agent_host: str
     agent_port: int
@@ -58,6 +59,41 @@ class Config:
     instagram_action_delay: int
     image_gen_base_url: str | None
     image_gen_api_key: str | None
+    browser_stealth_mode: str
+    encryption_key_path: str
+
+    def __post_init__(self) -> None:
+        """Validate configuration values."""
+        if self.openai_timeout <= 0:
+            raise ValueError("OPENAI_TIMEOUT must be > 0")
+        if self.shell_command_timeout <= 0:
+            raise ValueError("SHELL_COMMAND_TIMEOUT must be > 0")
+        if self.context_max_tokens <= 0:
+            raise ValueError("CONTEXT_MAX_TOKENS must be > 0")
+        if self.codex_timeout <= 0:
+            raise ValueError("CODEX_TIMEOUT must be > 0")
+        if self.max_tool_rounds <= 0:
+            raise ValueError("MAX_TOOL_ROUNDS must be > 0")
+        if self.max_continuations < 0:
+            raise ValueError("AGENT_MAX_CONTINUATIONS must be >= 0")
+        if self.scheduler_poll_interval <= 0:
+            raise ValueError("SCHEDULER_POLL_INTERVAL must be > 0")
+        if self.max_subagents <= 0:
+            raise ValueError("MAX_SUBAGENTS must be > 0")
+        if self.subagent_tool_rounds <= 0:
+            raise ValueError("SUBAGENT_TOOL_ROUNDS must be > 0")
+        if self.browser_use_timeout <= 0:
+            raise ValueError("BROWSER_USE_TIMEOUT must be > 0")
+        if self.auto_memory_extract_interval <= 0:
+            raise ValueError("AUTO_MEMORY_EXTRACT_INTERVAL must be > 0")
+        if self.auto_recall_threshold < 0 or self.auto_recall_threshold > 1:
+            raise ValueError("AUTO_RECALL_THRESHOLD must be between 0 and 1")
+        if self.auto_recall_top_k <= 0:
+            raise ValueError("AUTO_RECALL_TOP_K must be > 0")
+        if self.temp_file_ttl_hours <= 0:
+            raise ValueError("TEMP_FILE_TTL_HOURS must be > 0")
+        if self.embedding_dimensions <= 0:
+            raise ValueError("EMBEDDING_DIMENSIONS must be > 0")
 
     @classmethod
     def from_env(cls, env_path: str = ".env") -> "Config":
@@ -72,6 +108,7 @@ class Config:
         brave_key = os.getenv("BRAVE_SEARCH_API_KEY")
         model = os.getenv("OPENAI_MODEL", "gpt-4o")
         base_url = os.getenv("OPENAI_BASE_URL") or None
+        openai_timeout = int(os.getenv("OPENAI_TIMEOUT", "120"))
         agent_host = os.getenv("AGENT_HOST", "127.0.0.1")
         agent_port = int(os.getenv("AGENT_PORT", "7600"))
         telegram_token = os.getenv("TELEGRAM_BOT_TOKEN") or None
@@ -128,6 +165,8 @@ class Config:
         instagram_action_delay = int(os.getenv("INSTAGRAM_ACTION_DELAY_SECONDS", "5"))
         image_gen_base_url = os.getenv("IMAGE_GEN_BASE_URL") or None
         image_gen_api_key = os.getenv("IMAGE_GEN_API_KEY") or None
+        browser_stealth_mode = os.getenv("BROWSER_STEALTH_MODE", "default")
+        encryption_key_path = os.getenv("ENCRYPTION_KEY_PATH", "encryption.key")
 
         if not openai_key:
             raise ValueError("OPENAI_API_KEY is required")
@@ -140,6 +179,7 @@ class Config:
             openai_api_key=openai_key,
             openai_model=model,
             openai_base_url=base_url,
+            openai_timeout=openai_timeout,
             brave_search_api_key=brave_key,
             agent_host=agent_host,
             agent_port=agent_port,
@@ -185,4 +225,6 @@ class Config:
             instagram_action_delay=instagram_action_delay,
             image_gen_base_url=image_gen_base_url,
             image_gen_api_key=image_gen_api_key,
+            browser_stealth_mode=browser_stealth_mode,
+            encryption_key_path=encryption_key_path,
         )

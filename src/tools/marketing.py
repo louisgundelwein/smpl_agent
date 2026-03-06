@@ -46,6 +46,17 @@ class MarketingTool(Tool):
         self._openai_base_url = openai_base_url
         self._browser_timeout = browser_timeout
 
+    def _run_async_task(self, coro: Any) -> Any:
+        """Execute async task, handling existing event loops."""
+        try:
+            loop = asyncio.get_running_loop()
+            # Event loop already running, use run_coroutine_threadsafe
+            future = loop.run_coroutine_threadsafe(coro, loop)
+            return future.result(timeout=self._browser_timeout)
+        except RuntimeError:
+            # No running event loop, use asyncio.run
+            return asyncio.run(coro)
+
     @property
     def name(self) -> str:
         return "marketing"
@@ -289,7 +300,7 @@ class MarketingTool(Tool):
         )
 
         try:
-            result_str = asyncio.run(self._run_browser_task(browser_task))
+            result_str = self._run_async_task(self._run_browser_task(browser_task))
             # Try to parse the browser result for platform IDs
             platform_post_id = None
             try:
@@ -383,7 +394,7 @@ class MarketingTool(Tool):
         )
 
         try:
-            result_str = asyncio.run(self._run_browser_task(browser_task))
+            result_str = self._run_async_task(self._run_browser_task(browser_task))
             metrics_data = json.loads(result_str)
             metric_id = self._store.record_metrics(
                 post_id=post_id,
@@ -444,7 +455,7 @@ class MarketingTool(Tool):
         )
 
         try:
-            result_str = asyncio.run(self._run_browser_task(browser_task))
+            result_str = self._run_async_task(self._run_browser_task(browser_task))
             return result_str
         except Exception as exc:
             return json.dumps({"error": f"Failed to get comments: {exc}"})
@@ -482,7 +493,7 @@ class MarketingTool(Tool):
         )
 
         try:
-            result_str = asyncio.run(self._run_browser_task(browser_task))
+            result_str = self._run_async_task(self._run_browser_task(browser_task))
             return result_str
         except Exception as exc:
             return json.dumps({"error": f"Failed to reply: {exc}"})
@@ -513,7 +524,7 @@ class MarketingTool(Tool):
                         platform_post_id=post["platform_post_id"],
                     )
                     try:
-                        asyncio.run(self._run_browser_task(browser_task))
+                        self._run_async_task(self._run_browser_task(browser_task))
                     except Exception as exc:
                         logger.warning("Browser delete failed: %s", exc)
 

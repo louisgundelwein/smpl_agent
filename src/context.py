@@ -5,6 +5,13 @@ from typing import Any
 
 from src.llm import LLMClient
 
+# Try to import tiktoken for accurate token counting
+try:
+    import tiktoken
+    _TIKTOKEN_AVAILABLE = True
+except ImportError:
+    _TIKTOKEN_AVAILABLE = False
+
 
 SUMMARIZE_PROMPT = (
     "Summarize the following conversation history concisely. "
@@ -15,6 +22,16 @@ SUMMARIZE_PROMPT = (
 )
 
 CHARS_PER_TOKEN = 4
+
+
+def truncate_text(text: str, max_len: int = 2000) -> str:
+    """Truncate text longer than max_len, preserving start and end.
+
+    Format: first 1000 chars + "...[truncated]..." + last 500 chars
+    """
+    if len(text) <= max_len:
+        return text
+    return text[:1000] + "\n...[truncated]...\n" + text[-500:]
 
 
 class ContextManager:
@@ -34,9 +51,37 @@ class ContextManager:
         self._llm = llm
         self._max_tokens = max_tokens
         self._preserve_recent = preserve_recent
+        self._tiktoken_enc = None
+
+        # Initialize tiktoken encoder for OpenAI models if available
+        if _TIKTOKEN_AVAILABLE and self._is_openai_model(llm.model):
+            try:
+                self._tiktoken_enc = tiktoken.encoding_for_model(llm.model)
+            except (KeyError, Exception):
+                # Model not in tiktoken db or other error, fall back to char counting
+                pass
 
     def estimate_tokens(self, messages: list[dict[str, Any]]) -> int:
-        """Estimate total token count across all messages."""
+        """Estimate total token count using tiktoken if available, else fallback."""
+        if self._tiktoken_enc:
+            return self._count_tokens_tiktoken(messages)
+        return self._count_tokens_fallback(messages)
+
+    def _count_tokens_tiktoken(self, messages: list[dict[str, Any]]) -> int:
+        """Count tokens using tiktoken."""
+        total = 0
+        for msg in messages:
+            content = msg.get("content") or ""
+            if content:
+                total += len(self._tiktoken_enc.encode(content))
+            tool_calls = msg.get("tool_calls")
+            if tool_calls:
+                tool_json = json.dumps(tool_calls)
+                total += len(self._tiktoken_enc.encode(tool_json))
+        return total
+
+    def _count_tokens_fallback(self, messages: list[dict[str, Any]]) -> int:
+        """Fallback token count using character estimation."""
         total_chars = 0
         for msg in messages:
             content = msg.get("content") or ""
@@ -45,6 +90,11 @@ class ContextManager:
             if tool_calls:
                 total_chars += len(json.dumps(tool_calls))
         return total_chars // CHARS_PER_TOKEN
+
+    @staticmethod
+    def _is_openai_model(model: str) -> bool:
+        """Check if the model is an OpenAI model (gpt-*, o1-*, etc)."""
+        return model.startswith(("gpt-", "o1-"))
 
     def maybe_compress(
         self, messages: list[dict[str, Any]]
@@ -142,8 +192,7 @@ class ContextManager:
 
             if role == "tool":
                 name = msg.get("name", "unknown")
-                if len(content) > 2000:
-                    content = content[:1000] + "\n...[truncated]...\n" + content[-500:]
+                content = truncate_text(content)
                 parts.append(f"[Tool: {name}] {content}")
             elif role == "assistant" and msg.get("tool_calls"):
                 calls = msg.get("tool_calls", [])

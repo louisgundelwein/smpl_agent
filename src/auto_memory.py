@@ -2,8 +2,10 @@
 
 import logging
 import threading
+from queue import Queue
 from typing import Any
 
+from src.context import truncate_text
 from src.events import AutoMemoryStoredEvent, EventEmitter, MemoryCleanupEvent
 from src.llm import LLMClient
 from src.memory import MemoryStore
@@ -79,8 +81,10 @@ class AutoMemory:
         self._emitter = emitter or EventEmitter()
         self._extract_interval = extract_interval
         self._turn_count = 0
+        self._extraction_queue: Queue[list[dict[str, Any]]] = Queue()
         self._bg_thread: threading.Thread | None = None
         self._shutdown_event = threading.Event()
+        self._start_worker()
 
     def on_conversation_end(self, messages: list[dict[str, Any]]) -> None:
         """Summarize and store conversation before reset.
@@ -120,28 +124,19 @@ class AutoMemory:
         self._turn_count = 0
 
     def on_turn_end(self, messages: list[dict[str, Any]]) -> None:
-        """Increment turn counter; every N turns, extract facts in background.
+        """Increment turn counter; every N turns, queue facts extraction.
 
-        Skips if a previous extraction is still running.
+        Extractions are queued and processed sequentially by a worker thread.
         """
         self._turn_count += 1
         if self._turn_count % self._extract_interval != 0:
             return
 
-        if self._bg_thread is not None and self._bg_thread.is_alive():
-            logger.debug("Auto-memory: skipping extraction, previous thread still running")
-            return
-
-        # Snapshot recent messages for the background thread.
+        # Snapshot recent messages for the worker thread.
         tail_size = min(self._extract_interval * 2 + 2, MAX_EXTRACTION_MESSAGES)
         snapshot = list(messages[-tail_size:])
 
-        self._bg_thread = threading.Thread(
-            target=self._extract_facts,
-            args=(snapshot,),
-            daemon=True,
-        )
-        self._bg_thread.start()
+        self._extraction_queue.put(snapshot)
 
     def cleanup_duplicates(
         self, threshold: float = 0.90
@@ -232,8 +227,29 @@ class AutoMemory:
         text = (response.choices[0].message.content or "").strip()
         return text if text else None
 
+    def _start_worker(self) -> None:
+        """Start the extraction worker thread."""
+        self._bg_thread = threading.Thread(
+            target=self._worker_loop,
+            daemon=True,
+        )
+        self._bg_thread.start()
+
+    def _worker_loop(self) -> None:
+        """Worker thread: process extraction requests from the queue sequentially."""
+        while not self._shutdown_event.is_set():
+            try:
+                # Get next extraction request with timeout to allow shutdown checks
+                messages = self._extraction_queue.get(timeout=1)
+                if messages is None:  # Poison pill
+                    break
+                self._extract_facts(messages)
+            except Exception:
+                # Queue.Empty is raised on timeout, which is fine
+                continue
+
     def shutdown(self) -> None:
-        """Signal background thread to stop and wait briefly."""
+        """Signal worker thread to stop and wait briefly."""
         self._shutdown_event.set()
         if self._bg_thread is not None and self._bg_thread.is_alive():
             self._bg_thread.join(timeout=5)
@@ -315,8 +331,7 @@ def _format_messages_for_llm(messages: list[dict[str, Any]]) -> str:
 
         if role == "tool":
             name = msg.get("name", "unknown")
-            if len(content) > 2000:
-                content = content[:1000] + "\n...[truncated]...\n" + content[-500:]
+            content = truncate_text(content)
             parts.append(f"[Tool: {name}] {content}")
         elif role == "assistant" and msg.get("tool_calls"):
             calls = msg.get("tool_calls", [])

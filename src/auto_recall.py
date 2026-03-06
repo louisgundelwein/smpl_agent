@@ -34,10 +34,10 @@ class AutoRecall:
         self._threshold = threshold
         self._top_k = top_k
 
-    def recall(self, user_input: str) -> str | None:
+    def recall(self, user_input: str) -> dict[str, str] | None:
         """Search memory for relevant context given the user's message.
 
-        Returns a formatted string to inject into the conversation,
+        Returns a dict with 'role' and 'content' keys to inject into messages,
         or None if no relevant memories are found.
         """
         try:
@@ -61,7 +61,8 @@ class AutoRecall:
                 )
             )
 
-            return _format_recall(relevant)
+            formatted = _format_recall(relevant)
+            return {"role": "system", "content": formatted}
 
         except Exception:
             logger.exception("Auto-recall: search failed")

@@ -1,12 +1,15 @@
 """Email tool for reading (IMAP) and sending (SMTP) emails."""
 
+import base64
 import json
 import re
 import smtplib
 from datetime import date, datetime
+from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from html.parser import HTMLParser
+from pathlib import Path
 from typing import Any
 
 from imap_tools import AND, MailBox, MailMessage
@@ -125,6 +128,7 @@ class EmailTool(Tool):
                                 "list_folders", "read_emails", "search_emails",
                                 "read_email", "send_email",
                                 "mark_read", "move_email", "delete_email",
+                                "list_attachments", "download_attachment", "upload_attachment",
                             ],
                             "description": (
                                 "'add_account' to register an email account, "
@@ -137,7 +141,10 @@ class EmailTool(Tool):
                                 "'send_email' to send an email, "
                                 "'mark_read' to mark as read, "
                                 "'move_email' to move to folder, "
-                                "'delete_email' to delete."
+                                "'delete_email' to delete, "
+                                "'list_attachments' to list attachments for an email, "
+                                "'download_attachment' to save attachment to file, "
+                                "'upload_attachment' to send email with attachment."
                             ),
                         },
                         "account": {
@@ -233,6 +240,18 @@ class EmailTool(Tool):
                             "type": "string",
                             "description": "Search: emails until date (YYYY-MM-DD).",
                         },
+                        "attachment_index": {
+                            "type": "integer",
+                            "description": "Attachment index (for download_attachment).",
+                        },
+                        "output_path": {
+                            "type": "string",
+                            "description": "Path to save attachment (for download_attachment).",
+                        },
+                        "file_path": {
+                            "type": "string",
+                            "description": "Path to attachment file (for upload_attachment).",
+                        },
                     },
                     "required": ["action"],
                 },
@@ -268,6 +287,12 @@ class EmailTool(Tool):
                 return self._move_email(kwargs)
             elif action == "delete_email":
                 return self._delete_email(kwargs)
+            elif action == "list_attachments":
+                return self._list_attachments(kwargs)
+            elif action == "download_attachment":
+                return self._download_attachment(kwargs)
+            elif action == "upload_attachment":
+                return self._upload_attachment(kwargs)
             else:
                 return json.dumps({"error": f"Unknown action: {action}"})
         except Exception as exc:

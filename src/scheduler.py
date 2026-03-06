@@ -96,13 +96,38 @@ class SchedulerStore:
                         telegram_chat_id BIGINT,
                         last_run_at TEXT,
                         next_run_at TEXT NOT NULL,
-                        created_at TEXT NOT NULL
+                        created_at TEXT NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'pending',
+                        claimed_by TEXT,
+                        started_at TEXT
                     )
                 """)
                 # Migration: add direct_tool_call column for LLM-free execution.
                 cur.execute("""
                     DO $$ BEGIN
                         ALTER TABLE schedules ADD COLUMN direct_tool_call TEXT;
+                    EXCEPTION
+                        WHEN duplicate_column THEN NULL;
+                    END $$
+                """)
+                # Migration: add status tracking columns
+                cur.execute("""
+                    DO $$ BEGIN
+                        ALTER TABLE schedules ADD COLUMN status TEXT NOT NULL DEFAULT 'pending';
+                    EXCEPTION
+                        WHEN duplicate_column THEN NULL;
+                    END $$
+                """)
+                cur.execute("""
+                    DO $$ BEGIN
+                        ALTER TABLE schedules ADD COLUMN claimed_by TEXT;
+                    EXCEPTION
+                        WHEN duplicate_column THEN NULL;
+                    END $$
+                """)
+                cur.execute("""
+                    DO $$ BEGIN
+                        ALTER TABLE schedules ADD COLUMN started_at TEXT;
                     EXCEPTION
                         WHEN duplicate_column THEN NULL;
                     END $$
@@ -212,7 +237,7 @@ class SchedulerStore:
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT * FROM schedules WHERE enabled = TRUE AND next_run_at <= %s",
+                    "SELECT * FROM schedules WHERE enabled = TRUE AND next_run_at <= %s AND (status = 'pending' OR status = 'failed')",
                     (now.isoformat(),),
                 )
                 rows = cur.fetchall()
@@ -220,8 +245,26 @@ class SchedulerStore:
         finally:
             self._db.put_connection(conn)
 
-    def mark_run(self, task_id: int, now: datetime | None = None) -> None:
-        """Update last_run_at and compute the next next_run_at."""
+    def claim_task(self, task_id: int, claimed_by: str, now: datetime | None = None) -> bool:
+        """Atomically claim a task for execution. Returns True if claimed."""
+        if now is None:
+            now = datetime.now(timezone.utc)
+        conn = self._db.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """UPDATE schedules SET status = 'running', claimed_by = %s, started_at = %s
+                       WHERE id = %s AND status = 'pending'""",
+                    (claimed_by, now.isoformat(), task_id),
+                )
+                claimed = cur.rowcount > 0
+            conn.commit()
+            return claimed
+        finally:
+            self._db.put_connection(conn)
+
+    def mark_run(self, task_id: int, now: datetime | None = None, failed: bool = False) -> None:
+        """Update last_run_at and compute the next next_run_at. Mark as failed if requested."""
         if now is None:
             now = datetime.now(timezone.utc)
 
@@ -237,9 +280,10 @@ class SchedulerStore:
                     return
 
                 next_run = compute_next_run(row["cron_expression"], after=now)
+                status = 'failed' if failed else 'pending'
                 cur.execute(
-                    "UPDATE schedules SET last_run_at = %s, next_run_at = %s WHERE id = %s",
-                    (now.isoformat(), next_run.isoformat(), task_id),
+                    "UPDATE schedules SET last_run_at = %s, next_run_at = %s, status = %s, claimed_by = NULL, started_at = NULL WHERE id = %s",
+                    (now.isoformat(), next_run.isoformat(), status, task_id),
                 )
             conn.commit()
         finally:
@@ -301,10 +345,12 @@ class Scheduler:
         store: SchedulerStore,
         telegram_send: Callable[[int, str], None] | None = None,
         poll_interval: int = 30,
+        task_timeout: int = 300,
     ) -> None:
         self._store = store
         self._telegram_send = telegram_send
         self._poll_interval = poll_interval
+        self._task_timeout = task_timeout
         self._stop_event = threading.Event()
 
     def poll_loop(self, agent: Any, agent_lock: threading.Lock) -> None:
@@ -339,11 +385,18 @@ class Scheduler:
     def _run_task(
         self, task: dict, agent: Any, agent_lock: threading.Lock
     ) -> None:
-        """Execute a single scheduled task."""
+        """Execute a single scheduled task with timeout and atomic claiming."""
+        task_id = task["id"]
         task_name = task["name"]
         prompt = task["prompt"]
 
+        # Atomically claim the task
+        if not self._store.claim_task(task_id, claimed_by="scheduler"):
+            logger.debug("[scheduler] task '%s' already claimed by another instance", task_name)
+            return
+
         logger.info("[scheduler] running task: %s", task_name)
+        failed = False
 
         # Direct tool execution: bypass the LLM entirely.
         dtc_raw = task.get("direct_tool_call")
@@ -356,27 +409,49 @@ class Scheduler:
             except Exception as exc:
                 logger.error("[scheduler] direct task '%s' failed: %s", task_name, exc)
                 result = f"Error: {exc}"
-            self._store.mark_run(task["id"])
+                failed = True
+            self._store.mark_run(task_id, failed=failed)
             self._deliver_result(task, result)
             logger.info("[scheduler] task '%s' completed (direct)", task_name)
             return
 
-        # LLM-based execution (fallback for non-strategy tasks).
+        # LLM-based execution with timeout.
+        result_holder = {"result": None, "error": None}
+        exception_holder = {"exc": None}
+
+        def _run_with_timeout() -> None:
+            try:
+                result_holder["result"] = agent.run(
+                    f"[Scheduled task '{task_name}']: {prompt}\n\n"
+                    "Store the result in memory with tag 'scheduled-task'."
+                )
+            except Exception as exc:
+                exception_holder["exc"] = exc
+
         if not agent_lock.acquire(timeout=300):
             logger.warning("[scheduler] task '%s' skipped: agent busy", task_name)
+            self._store.mark_run(task_id, failed=True)
             return
+
         try:
-            result = agent.run(
-                f"[Scheduled task '{task_name}']: {prompt}\n\n"
-                "Store the result in memory with tag 'scheduled-task'."
-            )
-        except Exception as exc:
-            logger.error("[scheduler] task '%s' failed: %s", task_name, exc)
-            result = f"Error: {exc}"
+            executor = threading.Thread(target=_run_with_timeout, daemon=False)
+            executor.start()
+            executor.join(timeout=self._task_timeout)
+
+            if executor.is_alive():
+                logger.error("[scheduler] task '%s' timeout after %ds", task_name, self._task_timeout)
+                result = f"Task timed out after {self._task_timeout}s"
+                failed = True
+            elif exception_holder["exc"]:
+                logger.error("[scheduler] task '%s' failed: %s", task_name, exception_holder["exc"])
+                result = f"Error: {exception_holder['exc']}"
+                failed = True
+            else:
+                result = result_holder["result"] or ""
         finally:
             agent_lock.release()
 
-        self._store.mark_run(task["id"])
+        self._store.mark_run(task_id, failed=failed)
         self._deliver_result(task, result)
         logger.info("[scheduler] task '%s' completed", task_name)
 

@@ -23,6 +23,7 @@ class ConversationHistory:
     def __init__(self, db: Database, session_id: str = "default") -> None:
         self._db = db
         self._session_id = session_id
+        self._persisted_count = 0  # Track how many messages have been persisted
         self._init_schema()
 
     def _init_schema(self) -> None:
@@ -59,37 +60,51 @@ class ConversationHistory:
             self._db.put_connection(conn)
 
     def save(self, messages: list[dict[str, Any]]) -> None:
-        """Save the full message list (upsert conversation, replace messages)."""
+        """Save only new messages (delta-based).
+
+        Only inserts messages that haven't been persisted yet.
+        Falls back to full rewrite if message count decreased (e.g., deletion/editing).
+        """
         conn = self._db.get_connection()
         try:
             with conn.cursor() as cur:
+                # Upsert conversation
                 cur.execute(
                     """INSERT INTO conversations (id) VALUES (%s)
                        ON CONFLICT (id) DO UPDATE SET updated_at = NOW()""",
                     (self._session_id,),
                 )
-                cur.execute(
-                    "DELETE FROM messages WHERE conversation_id = %s",
-                    (self._session_id,),
-                )
-                rows = [
-                    (
-                        self._session_id,
-                        m.get("role"),
-                        m.get("content"),
-                        json.dumps(m["tool_calls"]) if "tool_calls" in m else None,
-                        m.get("tool_call_id"),
-                        m.get("name"),
+
+                # If message count decreased, fall back to full rewrite
+                if len(messages) < self._persisted_count:
+                    cur.execute(
+                        "DELETE FROM messages WHERE conversation_id = %s",
+                        (self._session_id,),
                     )
-                    for m in messages
-                ]
-                execute_values(
-                    cur,
-                    """INSERT INTO messages
-                        (conversation_id, role, content, tool_calls, tool_call_id, name)
-                       VALUES %s""",
-                    rows,
-                )
+                    self._persisted_count = 0
+
+                # Only insert new messages
+                if len(messages) > self._persisted_count:
+                    new_messages = messages[self._persisted_count:]
+                    rows = [
+                        (
+                            self._session_id,
+                            m.get("role"),
+                            m.get("content"),
+                            json.dumps(m["tool_calls"]) if "tool_calls" in m else None,
+                            m.get("tool_call_id"),
+                            m.get("name"),
+                        )
+                        for m in new_messages
+                    ]
+                    execute_values(
+                        cur,
+                        """INSERT INTO messages
+                            (conversation_id, role, content, tool_calls, tool_call_id, name)
+                           VALUES %s""",
+                        rows,
+                    )
+                    self._persisted_count = len(messages)
             conn.commit()
         finally:
             self._db.put_connection(conn)
@@ -133,6 +148,9 @@ class ConversationHistory:
 
         if not messages or messages[0].get("role") != "system":
             return None
+
+        # Update the persisted count to match loaded message count
+        self._persisted_count = len(messages)
         return messages
 
     def clear(self) -> None:

@@ -138,6 +138,69 @@ class MemoryStore:
         finally:
             self._db.put_connection(conn)
 
+    def batch_store(self, entries: list[dict[str, Any]]) -> list[int]:
+        """Store multiple memories in one transaction.
+
+        Args:
+            entries: List of dicts, each with 'content' and optional 'tags' keys.
+
+        Returns:
+            List of IDs for the stored memories.
+        """
+        if not entries:
+            return []
+
+        # Embed all contents at once
+        contents = [e["content"] for e in entries]
+        vectors = self._embedding_client.embed(contents)
+
+        conn = self._db.get_connection()
+        try:
+            with conn.cursor() as cur:
+                ids = []
+                for i, (content, vector) in enumerate(zip(contents, vectors)):
+                    tags = entries[i].get("tags", [])
+                    embedding_str = json.dumps(vector)
+                    metadata = json.dumps({"tags": tags})
+                    cur.execute(
+                        "INSERT INTO memories (content, embedding, metadata) VALUES (%s, %s::vector, %s::jsonb) RETURNING id",
+                        (content, embedding_str, metadata),
+                    )
+                    row = cur.fetchone()
+                    ids.append(row["id"])
+            conn.commit()
+            return ids
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            self._db.put_connection(conn)
+
+    def batch_delete(self, memory_ids: list[int]) -> int:
+        """Delete multiple memories in one transaction.
+
+        Args:
+            memory_ids: List of memory IDs to delete.
+
+        Returns:
+            Number of memories deleted.
+        """
+        if not memory_ids:
+            return 0
+
+        conn = self._db.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM memories WHERE id = ANY(%s)",
+                    (memory_ids,),
+                )
+                deleted = cur.rowcount
+            conn.commit()
+            return deleted
+        finally:
+            self._db.put_connection(conn)
+
     def count(self) -> int:
         """Return the total number of stored memories."""
         conn = self._db.get_connection()

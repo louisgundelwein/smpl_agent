@@ -121,11 +121,11 @@ class Agent:
         self._messages.append({"role": "user", "content": user_input})
 
         # Proactive memory recall: search for relevant memories and
-        # inject them as context before the first LLM call.
+        # inject them as a system message before the first LLM call.
         if self._auto_recall:
-            recall_context = self._auto_recall.recall(user_input)
-            if recall_context:
-                self._messages.append({"role": "user", "content": recall_context})
+            recall_msg = self._auto_recall.recall(user_input)
+            if recall_msg:
+                self._messages.append(recall_msg)
 
         tool_schemas = self._registry.get_schemas()
 

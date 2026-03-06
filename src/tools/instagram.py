@@ -308,7 +308,16 @@ class InstagramTool(Tool):
 
     def _exec_browser(self, task: BrowserTask, account_name: str | None = None) -> str:
         self._enforce_delay()
-        return asyncio.run(self._run_browser_task(task, account_name))
+        try:
+            loop = asyncio.get_running_loop()
+            # Event loop already running, use run_coroutine_threadsafe
+            future = loop.run_coroutine_threadsafe(
+                self._run_browser_task(task, account_name), loop
+            )
+            return future.result(timeout=300)
+        except RuntimeError:
+            # No running event loop, use asyncio.run
+            return asyncio.run(self._run_browser_task(task, account_name))
 
     # ------------------------------------------------------------------
     # Feed browsing

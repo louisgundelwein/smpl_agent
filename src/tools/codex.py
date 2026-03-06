@@ -5,6 +5,7 @@ import os
 import subprocess
 from typing import Any
 
+from src.scrub import scrub_secrets
 from src.tools.base import Tool
 
 
@@ -153,4 +154,4 @@ class CodexTool(Tool):
                 "error": f"Codex timed out after {self._timeout}s"
             })
         except Exception as exc:
-            return json.dumps({"error": str(exc)})
+            return json.dumps({"error": scrub_secrets(str(exc))})
