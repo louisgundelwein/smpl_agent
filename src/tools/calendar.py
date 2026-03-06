@@ -2,10 +2,12 @@
 
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 import caldav
+from icalendar import Calendar, Event, vDDDTypes
+from icalendar.prop import vDuration, vRecur
 
 from src.calendar_store import CalendarConnectionStore
 from src.tools.base import Tool
@@ -117,6 +119,10 @@ class CalendarTool(Tool):
                         "reminder_minutes": {
                             "type": "integer",
                             "description": "Reminder N minutes before the event.",
+                        },
+                        "rrule": {
+                            "type": "string",
+                            "description": "Recurrence rule (e.g. 'FREQ=DAILY;COUNT=10' or 'FREQ=WEEKLY;BYDAY=MO,WE,FR').",
                         },
                         "uid": {
                             "type": "string",
@@ -235,39 +241,43 @@ class CalendarTool(Tool):
         description: str = "",
         location: str = "",
         reminder_minutes: int | None = None,
+        rrule: str | None = None,
         uid: str | None = None,
     ) -> str:
-        """Build a VCALENDAR/VEVENT iCalendar string."""
+        """Build a VCALENDAR/VEVENT iCalendar string using icalendar library."""
         if uid is None:
             uid = str(uuid.uuid4())
 
-        def _fmt(dt: datetime) -> str:
-            return dt.strftime("%Y%m%dT%H%M%S")
+        cal = Calendar()
+        cal.add("prodid", "-//smpl_agent//CalendarTool//EN")
+        cal.add("version", "2.0")
 
-        lines = [
-            "BEGIN:VCALENDAR",
-            "VERSION:2.0",
-            "PRODID:-//smpl_agent//CalendarTool//EN",
-            "BEGIN:VEVENT",
-            f"UID:{uid}",
-            f"DTSTART:{_fmt(dtstart)}",
-            f"DTEND:{_fmt(dtend)}",
-            f"SUMMARY:{summary}",
-        ]
+        event = Event()
+        event.add("uid", uid)
+        event.add("dtstart", dtstart)
+        event.add("dtend", dtend)
+        event.add("summary", summary)
+
         if description:
-            lines.append(f"DESCRIPTION:{description}")
+            event.add("description", description)
         if location:
-            lines.append(f"LOCATION:{location}")
+            event.add("location", location)
+
+        # Add recurrence rule if provided
+        if rrule:
+            event.add("rrule", vRecur.from_ical(rrule))
+
+        # Add reminder alarm if specified
         if reminder_minutes is not None and reminder_minutes > 0:
-            lines.extend([
-                "BEGIN:VALARM",
-                "ACTION:DISPLAY",
-                f"TRIGGER:-PT{reminder_minutes}M",
-                f"DESCRIPTION:{summary} reminder",
-                "END:VALARM",
-            ])
-        lines.extend(["END:VEVENT", "END:VCALENDAR"])
-        return "\r\n".join(lines)
+            from icalendar import Alarm
+            alarm = Alarm()
+            alarm.add("action", "DISPLAY")
+            alarm.add("description", f"{summary} reminder")
+            alarm.add("trigger", vDuration(-timedelta(minutes=reminder_minutes)))
+            event.add_component(alarm)
+
+        cal.add_component(event)
+        return cal.to_ical().decode("utf-8")
 
     @staticmethod
     def _event_to_dict(event: Any) -> dict[str, Any]:
@@ -367,6 +377,7 @@ class CalendarTool(Tool):
             description=kw.get("description", ""),
             location=kw.get("location", ""),
             reminder_minutes=kw.get("reminder_minutes"),
+            rrule=kw.get("rrule"),
             uid=event_uid,
         )
         cal.save_event(vcal)
@@ -416,6 +427,11 @@ class CalendarTool(Tool):
                 vevent.location.value = kw["location"]
             else:
                 vevent.add("location").value = kw["location"]
+        if "rrule" in kw:
+            if hasattr(vevent, "rrule"):
+                vevent.rrule.value = vRecur.from_ical(kw["rrule"])
+            else:
+                vevent.add("rrule", vRecur.from_ical(kw["rrule"]))
 
         event.save()
 

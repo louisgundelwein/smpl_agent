@@ -81,6 +81,15 @@ class ReposTool(Tool):
             },
         }
 
+    @staticmethod
+    def _is_valid_url(url: str) -> bool:
+        """Check if URL starts with http://, https://, or git@."""
+        return (
+            url.startswith("http://") or
+            url.startswith("https://") or
+            url.startswith("git@")
+        )
+
     def execute(self, **kwargs: Any) -> str:
         """Execute a repos action. Returns JSON string with results or error."""
         action = kwargs.get("action")
@@ -110,6 +119,12 @@ class ReposTool(Tool):
         if not all([name, owner, repo, url]):
             return json.dumps({
                 "error": "name, owner, repo, and url are required for 'add' action"
+            })
+
+        # Validate URL format
+        if not self._is_valid_url(url):
+            return json.dumps({
+                "error": "URL must start with http://, https://, or git@"
             })
 
         repo_id = self._store.add(

@@ -1,12 +1,15 @@
 """Codex tool: delegate coding tasks to OpenAI's Codex CLI."""
 
 import json
+import logging
 import os
 import subprocess
 from typing import Any
 
 from src.scrub import scrub_secrets
 from src.tools.base import Tool
+
+logger = logging.getLogger(__name__)
 
 
 class CodexTool(Tool):
@@ -127,7 +130,8 @@ class CodexTool(Tool):
                     if event.get("type") == "message":
                         final_message = event
                         break
-                except (json.JSONDecodeError, TypeError):
+                except (json.JSONDecodeError, TypeError) as exc:
+                    logger.debug(f"Skipped malformed JSON line: {line[:100]}: {exc}")
                     continue
 
             if final_message:
