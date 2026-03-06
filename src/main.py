@@ -196,6 +196,7 @@ def create_agent(
             action_delay=config.linkedin_action_delay,
             browser_profiles_dir=config.browser_profiles_dir,
             email_store=email_store,
+            browser_use_api_key=config.browser_use_api_key,
         ))
     if config.browser_use_enabled:
         registry.register(BrowserTool(

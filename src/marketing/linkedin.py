@@ -11,8 +11,32 @@ if TYPE_CHECKING:
 
 
 def _login_prefix(credentials: dict[str, Any]) -> str:
+    check_already_logged_in = (
+        "First check if you are already logged in by looking at the page. "
+        "If the LinkedIn feed or navigation bar with your profile is visible, "
+        "skip the login and proceed directly. "
+        "Only log in if you see a login/sign-in page. "
+    )
+    if credentials.get("login_method") == "google":
+        return (
+            check_already_logged_in
+            + "If you need to log in: click 'Sign in' then click the "
+            "'Sign in with Google' button. "
+            "If a Google account chooser appears, select the account "
+            f"'{credentials['google_email']}'. "
+            "If a Google login form appears, enter email "
+            f"'{credentials['google_email']}' and click Next, "
+            f"then enter password '{credentials['google_password']}' and click Next. "
+            "Wait until the LinkedIn feed loads. "
+            "IMPORTANT: If a CAPTCHA or 'I am not a robot' challenge appears, "
+            "try to solve it. If you cannot solve it after 2 attempts, "
+            "try the direct email/password login on the LinkedIn login page instead "
+            f"(email: '{credentials['google_email']}', password: '{credentials['google_password']}'). "
+        )
     return (
-        f"Go to linkedin.com and log in with email '{credentials['username']}' "
+        check_already_logged_in
+        + "If you need to log in: "
+        f"log in with email '{credentials['username']}' "
         f"and password '{credentials['password']}'. "
     )
 
@@ -399,22 +423,44 @@ class LinkedInAdapter(PlatformAdapter):
         email_address: str,
         password: str,
         email_account_name: str,
+        login_method: str = "email",
+        google_email: str | None = None,
+        google_password: str | None = None,
     ) -> BrowserTask:
-        task = (
-            "Go to https://www.linkedin.com/signup. "
-            f"Fill in the first name field with '{first_name}'. "
-            f"Fill in the last name field with '{last_name}'. "
-            f"Fill in the email field with '{email_address}'. "
-            f"Fill in the password field with '{password}'. "
-            "Click the 'Agree & Join' button. "
-            "If a verification code is requested, call the "
-            f"read_verification_email action with email_account_name='{email_account_name}' "
-            "to get the code, then enter it in the verification field and click 'Verify'. "
-            "If a CAPTCHA appears, solve it visually. "
-            "If a phone number is required and cannot be skipped (try 'Skip' or 'Not now' first), "
-            'return {"error": "phone_verification_required"}. '
-            'On success, return {"success": true}.'
-        )
+        if login_method == "google":
+            task = (
+                "Go to https://www.linkedin.com/signup. "
+                "Click the 'Sign up with Google' or 'Continue with Google' button. "
+                f"If a Google account chooser appears, select '{google_email}'. "
+                "If a Google login form appears, enter email "
+                f"'{google_email}' and click Next, "
+                f"then enter password '{google_password}' and click Next. "
+                "If Google asks to confirm access for LinkedIn, click 'Allow' or 'Continue'. "
+                "If LinkedIn asks for first name / last name after Google auth, "
+                f"fill in '{first_name}' and '{last_name}'. "
+                "If a CAPTCHA appears, solve it visually. "
+                "If a phone number is required and cannot be skipped "
+                "(try 'Skip' or 'Not now' first), "
+                'return {"error": "phone_verification_required"}. '
+                'On success, return {"success": true}.'
+            )
+        else:
+            task = (
+                "Go to https://www.linkedin.com/signup. "
+                f"Fill in the first name field with '{first_name}'. "
+                f"Fill in the last name field with '{last_name}'. "
+                f"Fill in the email field with '{email_address}'. "
+                f"Fill in the password field with '{password}'. "
+                "Click the 'Agree & Join' button. "
+                "If a verification code is requested, call the "
+                f"read_verification_email action with email_account_name='{email_account_name}' "
+                "to get the code, then enter it in the verification field and click 'Verify'. "
+                "If a CAPTCHA appears, solve it visually. "
+                "If a phone number is required and cannot be skipped "
+                "(try 'Skip' or 'Not now' first), "
+                'return {"error": "phone_verification_required"}. '
+                'On success, return {"success": true}.'
+            )
         return self._enhance(
             BrowserTask(task_description=task, start_url="https://www.linkedin.com/signup"),
             context_keys=["signup", "captcha_handling"],

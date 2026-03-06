@@ -9,3 +9,7 @@ dist/
 conversation_history.json
 agent.pid
 agent.log
+browser_profiles/
+browser_recordings/
+*.db-shm
+*.db-wal

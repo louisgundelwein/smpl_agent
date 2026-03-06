@@ -37,7 +37,7 @@ def _ensure_dependencies() -> None:
     print(f"  [transcription] installing dependencies: {', '.join(missing_pip)}")
 
     result = subprocess.run(
-        [sys.executable, "-m", "pip", "install"] + missing_pip,
+        [sys.executable, "-m", "pip", "install", "--break-system-packages"] + missing_pip,
         capture_output=True,
         text=True,
         timeout=600,

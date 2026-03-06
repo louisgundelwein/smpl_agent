@@ -37,6 +37,7 @@ class LinkedInTool(Tool):
         action_delay: int = 2,
         browser_profiles_dir: str = "browser_profiles",
         email_store: "Any | None" = None,
+        browser_use_api_key: str | None = None,
     ) -> None:
         self._store = store
         self._knowledge = knowledge
@@ -49,6 +50,7 @@ class LinkedInTool(Tool):
         self._last_action_time = 0.0
         self._browser_profiles_dir = browser_profiles_dir
         self._email_store = email_store
+        self._browser_use_api_key = browser_use_api_key
 
     @property
     def name(self) -> str:
@@ -72,7 +74,7 @@ class LinkedInTool(Tool):
                         "action": {
                             "type": "string",
                             "enum": [
-                                "create_account",
+                                "create_account", "login",
                                 "browse_feed", "like_post", "comment_post", "repost",
                                 "send_connection", "accept_connections",
                                 "send_message", "search_people",
@@ -184,7 +186,20 @@ class LinkedInTool(Tool):
                         },
                         "linkedin_password": {
                             "type": "string",
-                            "description": "Password for the new LinkedIn account.",
+                            "description": "Password for the new LinkedIn account (email login).",
+                        },
+                        "login_method": {
+                            "type": "string",
+                            "enum": ["email", "google"],
+                            "description": "Login method: 'email' (default) or 'google'.",
+                        },
+                        "google_email": {
+                            "type": "string",
+                            "description": "Google account email (required when login_method is 'google').",
+                        },
+                        "google_password": {
+                            "type": "string",
+                            "description": "Google account password (required when login_method is 'google').",
                         },
                     },
                     "required": ["action"],
@@ -201,6 +216,11 @@ class LinkedInTool(Tool):
         if action == "create_account":
             try:
                 return self._action_create_account(kwargs)
+            except Exception as exc:
+                return json.dumps({"error": str(exc)})
+        if action == "login":
+            try:
+                return self._action_login(kwargs)
             except Exception as exc:
                 return json.dumps({"error": str(exc)})
         try:
@@ -231,6 +251,26 @@ class LinkedInTool(Tool):
         return acct, creds
 
     # ------------------------------------------------------------------
+    # Login (via browser-use with session persistence)
+    # ------------------------------------------------------------------
+
+    def _action_login(self, kw: dict) -> str:
+        """Explicit login — navigates to LinkedIn and logs in, saving the session."""
+        from src.marketing.linkedin import _login_prefix
+
+        _, creds = self._get_credentials(kw)
+        login_task = _login_prefix(creds) + (
+            "After logging in, confirm you can see the LinkedIn feed. "
+            'Return as JSON: {"logged_in": true}.'
+        )
+        from src.marketing.base import BrowserTask
+        task = BrowserTask(
+            task_description=login_task,
+            start_url="https://www.linkedin.com/feed/",
+        )
+        return self._exec_browser(task, account_name=kw.get("account"))
+
+    # ------------------------------------------------------------------
     # Browser execution
     # ------------------------------------------------------------------
 
@@ -240,21 +280,72 @@ class LinkedInTool(Tool):
             time.sleep(self._action_delay - elapsed)
         self._last_action_time = time.time()
 
-    async def _run_browser_task(
-        self, task: BrowserTask, account_name: str | None = None,
-    ) -> str:
-        from browser_use import Agent as BrowserAgent, Browser, BrowserConfig, Controller
-        from langchain_openai import ChatOpenAI
+    @staticmethod
+    def _ensure_xvfb() -> None:
+        """Start a virtual X display if none is running (needed for non-headless)."""
+        import os
+        import subprocess
+        if os.environ.get("DISPLAY"):
+            return
+        try:
+            subprocess.Popen(
+                ["Xvfb", ":99", "-screen", "0", "1920x1080x24", "-ac"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            os.environ["DISPLAY"] = ":99"
+            time.sleep(1)
+        except FileNotFoundError:
+            pass
 
+    def _build_browser_session(self, account_name: str | None = None) -> Any:
+        """Build a BrowserSession — cloud if API key is set, stealth local otherwise."""
+        from browser_use import BrowserSession
+
+        # Cloud mode: stealth infra + built-in CAPTCHA solving
+        if self._browser_use_api_key:
+            import os
+            os.environ.setdefault("BROWSER_USE_API_KEY", self._browser_use_api_key)
+            return BrowserSession(
+                headless=False,
+                use_cloud=True,
+                captcha_solver=True,
+                cloud_proxy_country_code="de",
+            )
+
+        # Local mode: Chromium + Xvfb + stealth flags + persistent profile
+        self._ensure_xvfb()
+        from browser_use import BrowserProfile
+        profile_kwargs: dict[str, Any] = {
+            "chromium_sandbox": False,
+            "args": [
+                "--disable-blink-features=AutomationControlled",
+                "--disable-infobars",
+                "--window-size=1920,1080",
+            ],
+        }
         if account_name:
             profile_dir = Path(self._browser_profiles_dir) / account_name
             profile_dir.mkdir(parents=True, exist_ok=True)
-            browser_config = BrowserConfig(
-                headless=True, user_data_dir=str(profile_dir),
-            )
-        else:
-            browser_config = BrowserConfig(headless=True)
-        browser = Browser(config=browser_config)
+            profile_kwargs["user_data_dir"] = str(profile_dir)
+        return BrowserSession(
+            headless=False,
+            browser_profile=BrowserProfile(**profile_kwargs),
+        )
+
+    async def _run_browser_task(
+        self, task: BrowserTask, account_name: str | None = None,
+    ) -> str:
+        try:
+            from browser_use import Agent as BrowserAgent, Controller
+        except ImportError:
+            from browser_use import Agent as BrowserAgent, Controller
+
+        try:
+            from browser_use import ChatOpenAI  # type: ignore[attr-defined]
+        except ImportError:
+            from langchain_openai import ChatOpenAI
+
+        browser = self._build_browser_session(account_name)
 
         llm_kwargs: dict[str, Any] = {
             "model": self._openai_model,
@@ -288,7 +379,10 @@ class LinkedInTool(Tool):
                 agent.run(), timeout=self._timeout,
             )
         finally:
-            await browser.close()
+            if hasattr(browser, 'stop'):
+                await browser.stop()
+            elif hasattr(browser, 'close'):
+                await browser.close()
 
         return str(result)
 
@@ -594,30 +688,49 @@ class LinkedInTool(Tool):
     def _action_create_account(self, kw: dict) -> str:
         first_name = kw.get("first_name")
         last_name = kw.get("last_name")
+        login_method = kw.get("login_method", "email")
+        google_email = kw.get("google_email")
+        google_password = kw.get("google_password")
         email_account = kw.get("email_account")
         linkedin_password = kw.get("linkedin_password")
 
-        if not all([first_name, last_name, email_account, linkedin_password]):
-            return json.dumps({
-                "error": "first_name, last_name, email_account, and linkedin_password are required",
-            })
+        if not first_name or not last_name:
+            return json.dumps({"error": "first_name and last_name are required"})
 
-        if not self._email_store:
-            return json.dumps({"error": "No email store configured — cannot create account"})
-
-        email_acct = self._email_store.get(email_account)
-        if not email_acct:
-            return json.dumps({"error": f"Email account '{email_account}' not found"})
-
-        email_address = email_acct["email_address"]
-
-        task = self._adapter.build_signup_task(
-            first_name=first_name,
-            last_name=last_name,
-            email_address=email_address,
-            password=linkedin_password,
-            email_account_name=email_account,
-        )
+        if login_method == "google":
+            if not google_email or not google_password:
+                return json.dumps({
+                    "error": "google_email and google_password are required for Google login",
+                })
+            email_address = google_email
+            task = self._adapter.build_signup_task(
+                first_name=first_name,
+                last_name=last_name,
+                email_address=google_email,
+                password="",
+                email_account_name="",
+                login_method="google",
+                google_email=google_email,
+                google_password=google_password,
+            )
+        else:
+            if not email_account or not linkedin_password:
+                return json.dumps({
+                    "error": "email_account and linkedin_password are required for email login",
+                })
+            if not self._email_store:
+                return json.dumps({"error": "No email store configured — cannot create account"})
+            email_acct = self._email_store.get(email_account)
+            if not email_acct:
+                return json.dumps({"error": f"Email account '{email_account}' not found"})
+            email_address = email_acct["email_address"]
+            task = self._adapter.build_signup_task(
+                first_name=first_name,
+                last_name=last_name,
+                email_address=email_address,
+                password=linkedin_password,
+                email_account_name=email_account,
+            )
 
         result_str = self._exec_browser(task)
 
@@ -631,11 +744,21 @@ class LinkedInTool(Tool):
 
         if data.get("success"):
             safe_name = re.sub(r"[^a-z0-9-]", "", f"li-{first_name}-{last_name}".lower())
+            if login_method == "google":
+                credentials = {
+                    "login_method": "google",
+                    "google_email": google_email,
+                    "google_password": google_password,
+                }
+                config = {"login_method": "google"}
+            else:
+                credentials = {"username": email_address, "password": linkedin_password}
+                config = {"email_account": email_account}
             account_id = self._store.add_account(
                 name=safe_name,
                 platform="linkedin",
-                credentials={"username": email_address, "password": linkedin_password},
-                config={"email_account": email_account},
+                credentials=credentials,
+                config=config,
             )
             profile_dir = Path(self._browser_profiles_dir) / safe_name
             profile_dir.mkdir(parents=True, exist_ok=True)
