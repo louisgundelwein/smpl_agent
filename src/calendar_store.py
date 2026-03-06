@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from src.db import Database
+from src.encryption import EncryptionManager
 
 
 class CalendarConnectionStore:
@@ -13,8 +14,9 @@ class CalendarConnectionStore:
     so the agent can manage multiple calendar providers at runtime.
     """
 
-    def __init__(self, db: Database) -> None:
+    def __init__(self, db: Database, encryption_key_path: str = "encryption.key") -> None:
         self._db = db
+        self._encryption = EncryptionManager(encryption_key_path)
         self._init_schema()
 
     def _init_schema(self) -> None:
@@ -61,13 +63,14 @@ class CalendarConnectionStore:
             psycopg2.errors.UniqueViolation: If name already exists.
         """
         now = datetime.now(timezone.utc).isoformat()
+        encrypted_password = self._encryption.encrypt(password)
         conn = self._db.get_connection()
         try:
             with conn.cursor() as cur:
                 cur.execute(
                     """INSERT INTO connections (name, url, username, password, provider, added_at)
                        VALUES (%s, %s, %s, %s, %s, %s) RETURNING id""",
-                    (name, url, username, password, provider, now),
+                    (name, url, username, encrypted_password, provider, now),
                 )
                 row = cur.fetchone()
             conn.commit()
@@ -95,7 +98,8 @@ class CalendarConnectionStore:
     def get(self, name: str) -> dict[str, Any] | None:
         """Get a connection by name (includes password for CalDAV auth).
 
-        Returns None if not found.
+        Returns None if not found. Decrypts password on retrieval and handles migration
+        of plaintext passwords to encrypted storage.
         """
         conn = self._db.get_connection()
         try:
@@ -106,7 +110,29 @@ class CalendarConnectionStore:
                     (name,),
                 )
                 row = cur.fetchone()
-            return dict(row) if row else None
+            if not row:
+                return None
+
+            result = dict(row)
+            password = result.get("password", "")
+
+            # Handle plaintext password migration: encrypt it on first access
+            if password and not self._encryption.is_encrypted(password):
+                encrypted_password = self._encryption.encrypt(password)
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE connections SET password = %s WHERE name = %s",
+                        (encrypted_password, name),
+                    )
+                conn.commit()
+                result["password"] = password
+            else:
+                # Decrypt the password
+                try:
+                    result["password"] = self._encryption.decrypt(password)
+                except Exception:
+                    result["password"] = ""
+            return result
         finally:
             self._db.put_connection(conn)
 

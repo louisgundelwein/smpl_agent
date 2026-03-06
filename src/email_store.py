@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from src.db import Database
+from src.encryption import EncryptionManager
 
 
 class EmailAccountStore:
@@ -13,8 +14,9 @@ class EmailAccountStore:
     so the agent can manage multiple email accounts at runtime.
     """
 
-    def __init__(self, db: Database) -> None:
+    def __init__(self, db: Database, encryption_key_path: str = "encryption.key") -> None:
         self._db = db
+        self._encryption = EncryptionManager(encryption_key_path)
         self._init_schema()
 
     def _init_schema(self) -> None:
@@ -70,6 +72,7 @@ class EmailAccountStore:
             psycopg2.errors.UniqueViolation: If name already exists.
         """
         now = datetime.now(timezone.utc).isoformat()
+        encrypted_password = self._encryption.encrypt(password)
         conn = self._db.get_connection()
         try:
             with conn.cursor() as cur:
@@ -78,7 +81,7 @@ class EmailAccountStore:
                        (name, email_address, password, imap_host, imap_port,
                         smtp_host, smtp_port, provider, added_at)
                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
-                    (name, email_address, password, imap_host, imap_port,
+                    (name, email_address, encrypted_password, imap_host, imap_port,
                      smtp_host, smtp_port, provider, now),
                 )
                 row = cur.fetchone()
@@ -108,7 +111,8 @@ class EmailAccountStore:
     def get(self, name: str) -> dict[str, Any] | None:
         """Get an account by name (includes password for auth).
 
-        Returns None if not found.
+        Returns None if not found. Decrypts password on retrieval and handles migration
+        of plaintext passwords to encrypted storage.
         """
         conn = self._db.get_connection()
         try:
@@ -120,7 +124,29 @@ class EmailAccountStore:
                     (name,),
                 )
                 row = cur.fetchone()
-            return dict(row) if row else None
+            if not row:
+                return None
+
+            result = dict(row)
+            password = result.get("password", "")
+
+            # Handle plaintext password migration: encrypt it on first access
+            if password and not self._encryption.is_encrypted(password):
+                encrypted_password = self._encryption.encrypt(password)
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE accounts SET password = %s WHERE name = %s",
+                        (encrypted_password, name),
+                    )
+                conn.commit()
+                result["password"] = password
+            else:
+                # Decrypt the password
+                try:
+                    result["password"] = self._encryption.decrypt(password)
+                except Exception:
+                    result["password"] = ""
+            return result
         finally:
             self._db.put_connection(conn)
 

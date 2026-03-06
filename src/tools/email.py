@@ -544,3 +544,140 @@ class EmailTool(Tool):
             mailbox.delete(uid)
 
         return json.dumps({"deleted": True, "uid": uid})
+
+    # ------------------------------------------------------------------
+    # Attachment operations
+    # ------------------------------------------------------------------
+
+    def _list_attachments(self, kw: dict) -> str:
+        """List attachments for a given email."""
+        account = kw.get("account")
+        uid = kw.get("uid")
+        if not all([account, uid]):
+            return json.dumps({
+                "error": "account and uid are required for 'list_attachments'"
+            })
+
+        acct = self._get_account(account)
+        folder = kw.get("folder", "INBOX")
+
+        with self._connect_imap(acct) as mailbox:
+            mailbox.folder.set(folder)
+            msg = mailbox.fetch(uid, mark_seen=False)
+            if not msg:
+                return json.dumps({"error": f"Email not found: {uid}"})
+            msg = msg[0]
+
+            attachments = []
+            for i, att in enumerate(msg.attachments):
+                attachments.append({
+                    "index": i,
+                    "filename": att.filename,
+                    "size": att.size,
+                })
+            return json.dumps({"attachments": attachments})
+
+    def _download_attachment(self, kw: dict) -> str:
+        """Download attachment from email and save to file."""
+        account = kw.get("account")
+        uid = kw.get("uid")
+        attachment_index = kw.get("attachment_index")
+        output_path = kw.get("output_path")
+
+        if not all([account, uid, attachment_index is not None, output_path]):
+            return json.dumps({
+                "error": "account, uid, attachment_index, and output_path are required"
+            })
+
+        acct = self._get_account(account)
+        folder = kw.get("folder", "INBOX")
+
+        try:
+            attachment_index = int(attachment_index)
+        except (ValueError, TypeError):
+            return json.dumps({"error": "attachment_index must be an integer"})
+
+        with self._connect_imap(acct) as mailbox:
+            mailbox.folder.set(folder)
+            msg = mailbox.fetch(uid, mark_seen=False)
+            if not msg:
+                return json.dumps({"error": f"Email not found: {uid}"})
+            msg = msg[0]
+
+            if attachment_index < 0 or attachment_index >= len(msg.attachments):
+                return json.dumps({
+                    "error": f"Invalid attachment index: {attachment_index}"
+                })
+
+            att = msg.attachments[attachment_index]
+            output = Path(output_path)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_bytes(att.payload)
+
+            return json.dumps({
+                "downloaded": True,
+                "filename": att.filename,
+                "size": att.size,
+                "output_path": str(output),
+            })
+
+    def _upload_attachment(self, kw: dict) -> str:
+        """Send email with attachment."""
+        account = kw.get("account")
+        to = kw.get("to")
+        subject = kw.get("subject")
+        body = kw.get("body")
+        file_path = kw.get("file_path")
+
+        if not all([account, to, subject, body, file_path]):
+            return json.dumps({
+                "error": "account, to, subject, body, and file_path are required"
+            })
+
+        acct = self._get_account(account)
+        is_html = kw.get("html", False)
+        cc = kw.get("cc")
+
+        # Create MIME message with multipart/mixed for attachments
+        mime_msg = MIMEMultipart("mixed")
+        mime_msg["Subject"] = subject
+        mime_msg["From"] = acct["email_address"]
+        mime_msg["To"] = to
+        if cc:
+            mime_msg["Cc"] = cc
+
+        # Add body
+        if is_html:
+            mime_msg.attach(MIMEText(body, "html"))
+        else:
+            mime_msg.attach(MIMEText(body, "plain"))
+
+        # Add attachment
+        file_path = Path(file_path)
+        if not file_path.exists():
+            return json.dumps({"error": f"File not found: {file_path}"})
+
+        with open(file_path, "rb") as f:
+            file_data = f.read()
+        attachment = MIMEApplication(file_data, name=file_path.name)
+        mime_msg.attach(attachment)
+
+        # Send email
+        smtp_port = acct["smtp_port"]
+        if smtp_port == 465:
+            server = smtplib.SMTP_SSL(acct["smtp_host"], smtp_port, timeout=30)
+        else:
+            server = smtplib.SMTP(acct["smtp_host"], smtp_port, timeout=30)
+
+        with server:
+            if smtp_port != 465:
+                server.starttls()
+            server.login(acct["email_address"], acct["password"])
+            server.send_message(mime_msg)
+
+        return json.dumps({
+            "sent": True,
+            "to": to,
+            "subject": subject,
+            "attachment": file_path.name,
+        })
