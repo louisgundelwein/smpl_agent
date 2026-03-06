@@ -62,7 +62,7 @@ class AutoRecall:
             )
 
             formatted = _format_recall(relevant)
-            return {"role": "system", "content": formatted}
+            return {"role": "user", "content": formatted}
 
         except Exception:
             logger.exception("Auto-recall: search failed")

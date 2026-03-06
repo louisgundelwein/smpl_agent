@@ -14,6 +14,7 @@ from src.events import (
     ContinuationEvent,
     LLMEndEvent,
     LLMStartEvent,
+    MemoryRecallEvent,
     RunSummaryEvent,
     SubagentResultsCollectedEvent,
     SubagentSpawnedEvent,
@@ -118,6 +119,13 @@ def _event_to_message(event: AgentEvent) -> dict[str, Any]:
             "tool_calls_made": event.tool_calls_made,
             "continuations_used": event.continuations_used,
             "total_duration_ms": event.total_duration_ms,
+        }
+    elif isinstance(event, MemoryRecallEvent):
+        return {
+            "type": "memory_recall",
+            "count": event.count,
+            "top_score": event.top_score,
+            "duration_ms": event.duration_ms,
         }
     # Defensive: log unknown event types instead of crashing
     logger.warning("Unknown event type: %s", type(event).__name__)
