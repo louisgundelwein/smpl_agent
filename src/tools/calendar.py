@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import caldav
-from icalendar import Calendar, Event, vDDDTypes
+from icalendar import Calendar, Event, vDDDTypes, Alarm
 from icalendar.prop import vDuration, vRecur
 
 from src.calendar_store import CalendarConnectionStore
@@ -269,7 +269,6 @@ class CalendarTool(Tool):
 
         # Add reminder alarm if specified
         if reminder_minutes is not None and reminder_minutes > 0:
-            from icalendar import Alarm
             alarm = Alarm()
             alarm.add("action", "DISPLAY")
             alarm.add("description", f"{summary} reminder")
