@@ -459,6 +459,67 @@ class TestCreateAccount:
         assert result["error"] == "phone_verification_required"
 
 
+class TestManualLogin:
+    def test_manual_login_missing_account(self, tool):
+        result = json.loads(tool.execute(action="manual_login"))
+        assert "error" in result
+
+    def test_manual_login_account_not_found(self, tool, mock_store):
+        mock_store.get_account.return_value = None
+        result = json.loads(tool.execute(action="manual_login", account="nope"))
+        assert "not found" in result["error"]
+
+    def test_manual_login_success(self, tool, mock_store, linkedin_account):
+        mock_store.get_account.return_value = linkedin_account
+        with patch.object(tool, "_exec_browser") as mock_browser:
+            mock_browser.return_value = '{"logged_in": true}'
+            result = json.loads(tool.execute(
+                action="manual_login", account="li-main",
+            ))
+        assert result["logged_in"] is True
+
+    def test_manual_login_uses_extended_timeout(self, tool, mock_store, linkedin_account):
+        mock_store.get_account.return_value = linkedin_account
+        tool._manual_login_timeout = 600
+        with patch.object(tool, "_exec_browser") as mock_browser:
+            mock_browser.return_value = '{"logged_in": true}'
+            original_timeout = tool._timeout
+            # Capture timeout during execution
+            def side_effect(task, account_name=None):
+                assert tool._timeout == 600
+                return '{"logged_in": true}'
+            mock_browser.side_effect = side_effect
+            tool.execute(action="manual_login", account="li-main")
+        # Timeout restored after
+        assert tool._timeout == original_timeout
+
+
+class TestSessionHealthCheck:
+    def test_session_valid(self, tool, tmp_path):
+        profile_dir = tmp_path / "profiles" / "li-main"
+        profile_dir.mkdir(parents=True)
+        with patch.object(tool, "_exec_browser") as mock_browser:
+            mock_browser.return_value = '{"logged_in": true}'
+            assert tool._is_session_valid("li-main") is True
+
+    def test_session_invalid(self, tool, tmp_path):
+        profile_dir = tmp_path / "profiles" / "li-main"
+        profile_dir.mkdir(parents=True)
+        with patch.object(tool, "_exec_browser") as mock_browser:
+            mock_browser.return_value = '{"logged_in": false}'
+            assert tool._is_session_valid("li-main") is False
+
+    def test_session_no_profile(self, tool):
+        assert tool._is_session_valid("nonexistent") is False
+
+    def test_session_check_exception(self, tool, tmp_path):
+        profile_dir = tmp_path / "profiles" / "li-main"
+        profile_dir.mkdir(parents=True)
+        with patch.object(tool, "_exec_browser") as mock_browser:
+            mock_browser.side_effect = RuntimeError("browser error")
+            assert tool._is_session_valid("li-main") is False
+
+
 class TestSessionPersistence:
     def test_browser_config_uses_profile_dir(self, tool, mock_store, linkedin_account, tmp_path):
         mock_store.get_account.return_value = linkedin_account
@@ -585,3 +646,37 @@ class TestPatchrightStealth:
         patchright_tool._cleanup_patchright()  # should not raise
 
         assert patchright_tool._patchright_refs is None
+
+    def test_patchright_stealth_args(self, patchright_tool, tmp_path):
+        """Patchright launch should include anti-detection args and context properties."""
+        mock_pw_instance = MagicMock()
+        mock_context = MagicMock()
+        mock_pw_instance.chromium.launch_persistent_context.return_value = mock_context
+
+        with patch("patchright.sync_api.sync_playwright") as mock_sync_pw:
+            mock_sync_pw.return_value.start.return_value = mock_pw_instance
+            patchright_tool._launch_patchright_browser(account_name="test-acct")
+
+        call_kwargs = mock_pw_instance.chromium.launch_persistent_context.call_args
+        args = call_kwargs.kwargs.get("args") or call_kwargs[1].get("args", [])
+        assert "--disable-extensions" in args
+        assert "--disable-sync" in args
+        assert "--password-store=basic" in args
+        # Check context properties
+        kw = call_kwargs.kwargs if call_kwargs.kwargs else call_kwargs[1]
+        assert kw.get("viewport") == {"width": 1920, "height": 1080}
+        assert kw.get("locale") == "en-US"
+        assert kw.get("timezone_id") == "Europe/Berlin"
+        assert "Chrome" in kw.get("user_agent", "")
+
+    def test_default_mode_stealth_args(self, tool):
+        """Default browser mode should include extra stealth args."""
+        import sys
+        mock_browser_use = MagicMock()
+        with patch.dict(sys.modules, {"browser_use": mock_browser_use}), \
+             patch.object(tool, "_ensure_xvfb"):
+            tool._build_browser_session(account_name=None)
+        profile_call = mock_browser_use.BrowserProfile.call_args
+        args = profile_call.kwargs.get("args", [])
+        assert "--disable-extensions" in args
+        assert "--password-store=basic" in args

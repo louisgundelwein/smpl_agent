@@ -10,6 +10,21 @@ if TYPE_CHECKING:
     from src.marketing.platform_knowledge import PlatformKnowledge
 
 
+def _captcha_instructions() -> str:
+    """Detailed CAPTCHA handling instructions for browser-use agent."""
+    return (
+        "\nCAPTCHA HANDLING: "
+        "If a CAPTCHA or verification challenge appears at any point: "
+        "- reCAPTCHA checkbox: Click 'I'm not a robot'. If a challenge appears after clicking, solve it. "
+        "- Image-grid CAPTCHA: Read the instruction carefully (e.g. 'select all images with traffic lights'). "
+        "Analyze each tile individually. Click ALL tiles that match the prompt. Then click Verify. "
+        "- Text CAPTCHA: Read the distorted text carefully and type it into the input field. "
+        "- Slider CAPTCHA: Drag the slider piece to the target position to complete the puzzle. "
+        "- After 2 failed CAPTCHA attempts: stop and return {\"error\": \"captcha_failed\"}. "
+        "You can also call the solve_captcha action for guided CAPTCHA analysis. "
+    )
+
+
 def _login_prefix(credentials: dict[str, Any]) -> str:
     check_already_logged_in = (
         "First check if you are already logged in by looking at the page. "
@@ -17,6 +32,7 @@ def _login_prefix(credentials: dict[str, Any]) -> str:
         "skip the login and proceed directly. "
         "Only log in if you see a login/sign-in page. "
     )
+    captcha = _captcha_instructions()
     if credentials.get("login_method") == "google":
         return (
             check_already_logged_in
@@ -28,16 +44,16 @@ def _login_prefix(credentials: dict[str, Any]) -> str:
             f"'{credentials['google_email']}' and click Next, "
             f"then enter password '{credentials['google_password']}' and click Next. "
             "Wait until the LinkedIn feed loads. "
-            "IMPORTANT: If a CAPTCHA or 'I am not a robot' challenge appears, "
-            "try to solve it. If you cannot solve it after 2 attempts, "
-            "try the direct email/password login on the LinkedIn login page instead "
+            "If a CAPTCHA appears, try the direct email/password login instead "
             f"(email: '{credentials['google_email']}', password: '{credentials['google_password']}'). "
+            + captcha
         )
     return (
         check_already_logged_in
         + "If you need to log in: "
         f"log in with email '{credentials['username']}' "
         f"and password '{credentials['password']}'. "
+        + captcha
     )
 
 
@@ -427,6 +443,7 @@ class LinkedInAdapter(PlatformAdapter):
         google_email: str | None = None,
         google_password: str | None = None,
     ) -> BrowserTask:
+        captcha = _captcha_instructions()
         if login_method == "google":
             task = (
                 "Go to https://www.linkedin.com/signup. "
@@ -438,8 +455,8 @@ class LinkedInAdapter(PlatformAdapter):
                 "If Google asks to confirm access for LinkedIn, click 'Allow' or 'Continue'. "
                 "If LinkedIn asks for first name / last name after Google auth, "
                 f"fill in '{first_name}' and '{last_name}'. "
-                "If a CAPTCHA appears, solve it visually. "
-                "If a phone number is required and cannot be skipped "
+                + captcha
+                + "If a phone number is required and cannot be skipped "
                 "(try 'Skip' or 'Not now' first), "
                 'return {"error": "phone_verification_required"}. '
                 'On success, return {"success": true}.'
@@ -455,8 +472,8 @@ class LinkedInAdapter(PlatformAdapter):
                 "If a verification code is requested, call the "
                 f"read_verification_email action with email_account_name='{email_account_name}' "
                 "to get the code, then enter it in the verification field and click 'Verify'. "
-                "If a CAPTCHA appears, solve it visually. "
-                "If a phone number is required and cannot be skipped "
+                + captcha
+                + "If a phone number is required and cannot be skipped "
                 "(try 'Skip' or 'Not now' first), "
                 'return {"error": "phone_verification_required"}. '
                 'On success, return {"success": true}.'

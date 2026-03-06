@@ -138,8 +138,24 @@
 - Phone number is optional — try to skip ("Skip" / "Not now")
 
 ## CAPTCHA Handling
-- CAPTCHAs appear as image challenges or puzzle sliders
-- For image CAPTCHAs: identify described objects, click correct tiles
-- For text CAPTCHAs: read distorted text and type it
-- reCAPTCHA checkbox: just click it
-- After 2 failed attempts: abort
+
+CAPTCHAs are triggered by rapid actions, fresh profiles, or bot-detection signals.
+
+### Types
+- **reCAPTCHA checkbox**: Click "I'm not a robot". If a visual challenge follows, solve it.
+- **Image-grid CAPTCHA**: Read the instruction (e.g. "select all images with traffic lights"). Analyze each tile individually. Click ALL matching tiles, then click Verify. If new tiles appear, repeat.
+- **Text CAPTCHA**: Read the distorted/warped text and type it into the input field.
+- **Slider CAPTCHA**: Drag the puzzle piece to its target position to complete the image.
+- **Arkose/FunCAPTCHA**: Similar to image-grid — follow on-screen instructions to rotate or match images.
+
+### Strategy
+1. Use the `solve_captcha` controller action for guided analysis.
+2. Take a screenshot before attempting to solve.
+3. After 2 failed attempts on the same CAPTCHA: abort and return `{"error": "captcha_failed"}`.
+4. Slow down interactions after a CAPTCHA appears (wait 3-5s between clicks).
+
+### Prevention
+- Reuse persistent browser profiles (session cookies avoid re-login).
+- Use `manual_login` action for initial login to build a trusted session.
+- Keep at least 2 seconds between actions.
+- Avoid rapid page navigation patterns.

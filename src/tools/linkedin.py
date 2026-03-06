@@ -40,6 +40,8 @@ class LinkedInTool(Tool):
         email_store: "Any | None" = None,
         browser_use_api_key: str | None = None,
         browser_stealth_mode: str = "default",
+        browser_stealth_timezone: str = "Europe/Berlin",
+        manual_login_timeout: int = 300,
     ) -> None:
         self._store = store
         self._knowledge = knowledge
@@ -54,6 +56,8 @@ class LinkedInTool(Tool):
         self._email_store = email_store
         self._browser_use_api_key = browser_use_api_key
         self._browser_stealth_mode = browser_stealth_mode
+        self._browser_stealth_timezone = browser_stealth_timezone
+        self._manual_login_timeout = manual_login_timeout
         self._patchright_refs: Any | None = None
 
     @property
@@ -78,7 +82,7 @@ class LinkedInTool(Tool):
                         "action": {
                             "type": "string",
                             "enum": [
-                                "create_account", "login",
+                                "create_account", "login", "manual_login",
                                 "browse_feed", "like_post", "comment_post", "repost",
                                 "send_connection", "accept_connections",
                                 "send_message", "search_people",
@@ -227,6 +231,11 @@ class LinkedInTool(Tool):
                 return self._action_login(kwargs)
             except Exception as exc:
                 return json.dumps({"error": scrub_secrets(str(exc))})
+        if action == "manual_login":
+            try:
+                return self._action_manual_login(kwargs)
+            except Exception as exc:
+                return json.dumps({"error": scrub_secrets(str(exc))})
         try:
             handler = getattr(self, f"_action_{action}", None)
             if handler is None:
@@ -275,6 +284,69 @@ class LinkedInTool(Tool):
         return self._exec_browser(task, account_name=kw.get("account"))
 
     # ------------------------------------------------------------------
+    # Manual login (interactive, headless=False)
+    # ------------------------------------------------------------------
+
+    def _action_manual_login(self, kw: dict) -> str:
+        """Open browser for manual login — user logs in interactively."""
+        account_name = kw.get("account")
+        if not account_name:
+            return json.dumps({"error": "account is required"})
+        acct = self._store.get_account(account_name)
+        if not acct:
+            return json.dumps({"error": f"Account '{account_name}' not found"})
+
+        task = BrowserTask(
+            task_description=(
+                "Navigate to https://www.linkedin.com/login. "
+                "The user will log in manually. Wait and observe the page. "
+                "Once the LinkedIn feed is visible (the URL contains '/feed' "
+                "or the navigation bar with the user's profile picture appears), "
+                'return {"logged_in": true}. '
+                "Do not interact with the login form yourself."
+            ),
+            start_url="https://www.linkedin.com/login",
+        )
+        saved_timeout = self._timeout
+        self._timeout = self._manual_login_timeout
+        try:
+            result = self._exec_browser(task, account_name=account_name)
+        finally:
+            self._timeout = saved_timeout
+        return result
+
+    # ------------------------------------------------------------------
+    # Session health check
+    # ------------------------------------------------------------------
+
+    def _is_session_valid(self, account_name: str) -> bool:
+        """Check if the saved browser session is still logged in."""
+        profile_dir = Path(self._browser_profiles_dir) / account_name
+        if not profile_dir.exists():
+            return False
+
+        task = BrowserTask(
+            task_description=(
+                "Check if you are logged in to LinkedIn. "
+                "If the feed or navigation bar with your profile is visible, "
+                'return {"logged_in": true}. '
+                "If you see a login page or redirect, "
+                'return {"logged_in": false}.'
+            ),
+            start_url="https://www.linkedin.com/feed/",
+        )
+        saved_timeout = self._timeout
+        self._timeout = 15
+        try:
+            result_str = self._exec_browser(task, account_name=account_name)
+            data = json.loads(result_str)
+            return data.get("logged_in", False) is True
+        except Exception:
+            return False
+        finally:
+            self._timeout = saved_timeout
+
+    # ------------------------------------------------------------------
     # Browser execution
     # ------------------------------------------------------------------
 
@@ -316,6 +388,24 @@ class LinkedInTool(Tool):
         except FileNotFoundError:
             pass
 
+    _STEALTH_ARGS = [
+        "--remote-debugging-port=9222",
+        "--disable-infobars",
+        "--window-size=1920,1080",
+        "--disable-extensions",
+        "--disable-sync",
+        "--no-service-autorun",
+        "--disable-notifications",
+        "--disable-popup-blocking",
+        "--password-store=basic",
+    ]
+
+    _STEALTH_USER_AGENT = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/125.0.0.0 Safari/537.36"
+    )
+
     def _launch_patchright_browser(self, account_name: str | None = None) -> tuple[Any, str]:
         """Launch stealth browser via patchright, return (refs, cdp_url)."""
         from patchright.sync_api import sync_playwright
@@ -328,17 +418,20 @@ class LinkedInTool(Tool):
         pw = sync_playwright().start()
         launch_kwargs: dict[str, Any] = {
             "headless": False,
-            "args": [
-                "--remote-debugging-port=9222",
-                "--disable-infobars",
-                "--window-size=1920,1080",
-            ],
+            "args": list(self._STEALTH_ARGS),
+        }
+        context_kwargs: dict[str, Any] = {
+            "viewport": {"width": 1920, "height": 1080},
+            "locale": "en-US",
+            "timezone_id": self._browser_stealth_timezone,
+            "user_agent": self._STEALTH_USER_AGENT,
         }
 
         if profile_dir:
             context = pw.chromium.launch_persistent_context(
                 profile_dir,
                 **launch_kwargs,
+                **context_kwargs,
             )
             return (pw, context), "http://127.0.0.1:9222"
 
@@ -375,6 +468,12 @@ class LinkedInTool(Tool):
                 "--disable-blink-features=AutomationControlled",
                 "--disable-infobars",
                 "--window-size=1920,1080",
+                "--disable-extensions",
+                "--disable-sync",
+                "--no-service-autorun",
+                "--disable-notifications",
+                "--disable-popup-blocking",
+                "--password-store=basic",
             ],
         }
         if account_name:
@@ -414,6 +513,21 @@ class LinkedInTool(Tool):
             full_task = f"Go to {task.start_url}. Then: {full_task}"
 
         controller = Controller()
+
+        @controller.action("Analyze and solve a CAPTCHA challenge on the current page")
+        async def solve_captcha() -> str:
+            return json.dumps({
+                "instruction": (
+                    "Take a screenshot now. Analyze the CAPTCHA type. "
+                    "For checkbox: click 'I'm not a robot'. "
+                    "For image grid: read the instruction, identify matching objects "
+                    "in each tile, click all matching tiles, then click Verify. "
+                    "For slider: drag the slider to the target position. "
+                    "For text CAPTCHA: read the distorted text and type it. "
+                    "Describe what you see and act accordingly."
+                ),
+            })
+
         if self._email_store:
             from src.marketing.email_helper import EmailVerificationReader
 

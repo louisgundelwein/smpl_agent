@@ -200,6 +200,8 @@ def create_agent(
             email_store=email_store,
             browser_use_api_key=config.browser_use_api_key,
             browser_stealth_mode=config.browser_stealth_mode,
+            browser_stealth_timezone=config.browser_stealth_timezone,
+            manual_login_timeout=config.linkedin_manual_login_timeout,
         ))
     if marketing_store and config.reddit_enabled:
         from src.marketing.platform_knowledge import PlatformKnowledge as _PK

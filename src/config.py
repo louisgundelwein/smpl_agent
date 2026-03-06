@@ -60,6 +60,8 @@ class Config:
     image_gen_base_url: str | None
     image_gen_api_key: str | None
     browser_stealth_mode: str
+    browser_stealth_timezone: str
+    linkedin_manual_login_timeout: int
     encryption_key_path: str
 
     def __post_init__(self) -> None:
@@ -166,6 +168,8 @@ class Config:
         image_gen_base_url = os.getenv("IMAGE_GEN_BASE_URL") or None
         image_gen_api_key = os.getenv("IMAGE_GEN_API_KEY") or None
         browser_stealth_mode = os.getenv("BROWSER_STEALTH_MODE", "default")
+        browser_stealth_timezone = os.getenv("BROWSER_STEALTH_TIMEZONE", "Europe/Berlin")
+        linkedin_manual_login_timeout = int(os.getenv("LINKEDIN_MANUAL_LOGIN_TIMEOUT", "300"))
         encryption_key_path = os.getenv("ENCRYPTION_KEY_PATH", "encryption.key")
 
         if not openai_key:
@@ -226,5 +230,7 @@ class Config:
             image_gen_base_url=image_gen_base_url,
             image_gen_api_key=image_gen_api_key,
             browser_stealth_mode=browser_stealth_mode,
+            browser_stealth_timezone=browser_stealth_timezone,
+            linkedin_manual_login_timeout=linkedin_manual_login_timeout,
             encryption_key_path=encryption_key_path,
         )
