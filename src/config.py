@@ -50,8 +50,14 @@ class Config:
     linkedin_enabled: bool
     linkedin_action_delay: int
     linkedin_knowledge_dir: str
+    reddit_enabled: bool
+    reddit_action_delay: int
     browser_profiles_dir: str
     browser_use_api_key: str | None
+    instagram_enabled: bool
+    instagram_action_delay: int
+    image_gen_base_url: str | None
+    image_gen_api_key: str | None
 
     @classmethod
     def from_env(cls, env_path: str = ".env") -> "Config":
@@ -114,8 +120,14 @@ class Config:
         linkedin_enabled = os.getenv("LINKEDIN_ENABLED", "false").lower() in ("true", "1", "yes")
         linkedin_action_delay = int(os.getenv("LINKEDIN_ACTION_DELAY_SECONDS", "2"))
         linkedin_knowledge_dir = os.getenv("LINKEDIN_KNOWLEDGE_DIR", "src/marketing/platform_guides")
+        reddit_enabled = os.getenv("REDDIT_ENABLED", "false").lower() in ("true", "1", "yes")
+        reddit_action_delay = int(os.getenv("REDDIT_ACTION_DELAY_SECONDS", "3"))
         browser_profiles_dir = os.getenv("BROWSER_PROFILES_DIR", "browser_profiles")
         browser_use_api_key = os.getenv("BROWSER_USE_API_KEY")
+        instagram_enabled = os.getenv("INSTAGRAM_ENABLED", "false").lower() in ("true", "1", "yes")
+        instagram_action_delay = int(os.getenv("INSTAGRAM_ACTION_DELAY_SECONDS", "5"))
+        image_gen_base_url = os.getenv("IMAGE_GEN_BASE_URL") or None
+        image_gen_api_key = os.getenv("IMAGE_GEN_API_KEY") or None
 
         if not openai_key:
             raise ValueError("OPENAI_API_KEY is required")
@@ -165,6 +177,12 @@ class Config:
             linkedin_enabled=linkedin_enabled,
             linkedin_action_delay=linkedin_action_delay,
             linkedin_knowledge_dir=linkedin_knowledge_dir,
+            reddit_enabled=reddit_enabled,
+            reddit_action_delay=reddit_action_delay,
             browser_profiles_dir=browser_profiles_dir,
             browser_use_api_key=browser_use_api_key,
+            instagram_enabled=instagram_enabled,
+            instagram_action_delay=instagram_action_delay,
+            image_gen_base_url=image_gen_base_url,
+            image_gen_api_key=image_gen_api_key,
         )

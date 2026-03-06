@@ -33,6 +33,7 @@ from src.tools import (
     GitHubTool,
     LinkedInTool,
     MarketingTool,
+    RedditTool,
     MemoryTool,
     ReposTool,
     SchedulerTool,
@@ -197,6 +198,50 @@ def create_agent(
             browser_profiles_dir=config.browser_profiles_dir,
             email_store=email_store,
             browser_use_api_key=config.browser_use_api_key,
+        ))
+    if marketing_store and config.reddit_enabled:
+        from src.marketing.platform_knowledge import PlatformKnowledge as _PK
+        from src.marketing.reddit import RedditAdapter as _RedditAdapter
+
+        reddit_knowledge = _PK(
+            knowledge_dir=Path(config.linkedin_knowledge_dir),
+            db=db,
+        )
+        reddit_adapter = _RedditAdapter(reddit_knowledge)
+        registry.register(RedditTool(
+            store=marketing_store,
+            knowledge=reddit_knowledge,
+            adapter=reddit_adapter,
+            openai_api_key=config.openai_api_key,
+            openai_model=config.openai_model,
+            openai_base_url=config.openai_base_url,
+            timeout=config.browser_use_timeout,
+            action_delay=config.reddit_action_delay,
+            browser_profiles_dir=config.browser_profiles_dir,
+            email_store=email_store,
+        ))
+    if marketing_store and config.instagram_enabled:
+        from src.marketing.platform_knowledge import PlatformKnowledge as _PK
+        from src.marketing.instagram import InstagramAdapter as _InstagramAdapter
+
+        ig_knowledge = _PK(
+            knowledge_dir=Path(config.linkedin_knowledge_dir),
+            db=db,
+        )
+        ig_adapter = _InstagramAdapter(ig_knowledge)
+        registry.register(InstagramTool(
+            store=marketing_store,
+            knowledge=ig_knowledge,
+            adapter=ig_adapter,
+            openai_api_key=config.openai_api_key,
+            openai_model=config.openai_model,
+            openai_base_url=config.openai_base_url,
+            timeout=config.browser_use_timeout,
+            action_delay=config.instagram_action_delay,
+            browser_profiles_dir=config.browser_profiles_dir,
+            email_store=email_store,
+            image_gen_base_url=config.image_gen_base_url,
+            image_gen_api_key=config.image_gen_api_key,
         ))
     if config.browser_use_enabled:
         registry.register(BrowserTool(

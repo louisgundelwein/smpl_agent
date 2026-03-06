@@ -51,7 +51,11 @@
       "Bash(pip3 list:*)",
       "WebFetch(domain:hyperliquid.gitbook.io)",
       "Bash(rtk test:*)",
-      "Bash(rtk:*)"
+      "Bash(rtk:*)",
+      "Bash(git rm:*)",
+      "Bash(python:*)",
+      "WebFetch(domain:docs.browser-use.com)",
+      "WebFetch(domain:raw.githubusercontent.com)"
     ]
   }
 }

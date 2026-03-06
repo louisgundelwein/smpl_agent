@@ -10,6 +10,8 @@ from src.tools.email import EmailTool
 from src.tools.github import GitHubTool
 from src.tools.linkedin import LinkedInTool
 from src.tools.marketing import MarketingTool
+from src.tools.instagram import InstagramTool
+from src.tools.reddit import RedditTool
 from src.tools.memory import MemoryTool
 from src.tools.repos import ReposTool
 from src.tools.scheduler import SchedulerTool
@@ -25,8 +27,10 @@ __all__ = [
     "CodexTool",
     "EmailTool",
     "GitHubTool",
+    "InstagramTool",
     "LinkedInTool",
     "MarketingTool",
+    "RedditTool",
     "MemoryTool",
     "ReposTool",
     "SchedulerTool",

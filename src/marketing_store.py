@@ -632,5 +632,103 @@ class MarketingStore:
         finally:
             self._db.put_connection(conn)
 
+    # ------------------------------------------------------------------
+    # Reddit Profile Metrics
+    # ------------------------------------------------------------------
+
+    def record_reddit_profile_metrics(
+        self,
+        account_id: int,
+        post_karma: int | None = None,
+        comment_karma: int | None = None,
+        total_karma: int | None = None,
+        account_age_days: int | None = None,
+    ) -> int:
+        conn = self._db.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """INSERT INTO reddit_profile_metrics
+                       (account_id, post_karma, comment_karma, total_karma, account_age_days)
+                       VALUES (%s, %s, %s, %s, %s) RETURNING id""",
+                    (account_id, post_karma, comment_karma, total_karma, account_age_days),
+                )
+                row = cur.fetchone()
+            conn.commit()
+            return row["id"]
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            self._db.put_connection(conn)
+
+    def get_reddit_profile_metrics_history(
+        self,
+        account_id: int,
+        days: int = 30,
+    ) -> list[dict[str, Any]]:
+        conn = self._db.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT * FROM reddit_profile_metrics "
+                    "WHERE account_id = %s AND recorded_at >= NOW() - INTERVAL '%s days' "
+                    "ORDER BY recorded_at",
+                    (account_id, days),
+                )
+                rows = cur.fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            self._db.put_connection(conn)
+
+    # ------------------------------------------------------------------
+    # Instagram Profile Metrics
+    # ------------------------------------------------------------------
+
+    def record_instagram_profile_metrics(
+        self,
+        account_id: int,
+        followers: int | None = None,
+        following: int | None = None,
+        posts_count: int | None = None,
+        engagement_rate: float | None = None,
+    ) -> int:
+        conn = self._db.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """INSERT INTO instagram_profile_metrics
+                       (account_id, followers, following, posts_count, engagement_rate)
+                       VALUES (%s, %s, %s, %s, %s) RETURNING id""",
+                    (account_id, followers, following, posts_count, engagement_rate),
+                )
+                row = cur.fetchone()
+            conn.commit()
+            return row["id"]
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            self._db.put_connection(conn)
+
+    def get_instagram_profile_metrics_history(
+        self,
+        account_id: int,
+        days: int = 30,
+    ) -> list[dict[str, Any]]:
+        conn = self._db.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT * FROM instagram_profile_metrics "
+                    "WHERE account_id = %s AND recorded_at >= NOW() - INTERVAL '%s days' "
+                    "ORDER BY recorded_at",
+                    (account_id, days),
+                )
+                rows = cur.fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            self._db.put_connection(conn)
+
     def close(self) -> None:
         """No-op — connection pool is managed by Database."""
