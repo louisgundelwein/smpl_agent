@@ -12,6 +12,7 @@ from src.marketing.base import BrowserTask
 from src.marketing.linkedin import LinkedInAdapter
 from src.marketing.platform_knowledge import PlatformKnowledge
 from src.marketing_store import MarketingStore
+from src.scrub import scrub_secrets
 from src.tools.base import Tool
 
 logger = logging.getLogger(__name__)
@@ -38,6 +39,7 @@ class LinkedInTool(Tool):
         browser_profiles_dir: str = "browser_profiles",
         email_store: "Any | None" = None,
         browser_use_api_key: str | None = None,
+        browser_stealth_mode: str = "default",
     ) -> None:
         self._store = store
         self._knowledge = knowledge
@@ -51,6 +53,8 @@ class LinkedInTool(Tool):
         self._browser_profiles_dir = browser_profiles_dir
         self._email_store = email_store
         self._browser_use_api_key = browser_use_api_key
+        self._browser_stealth_mode = browser_stealth_mode
+        self._patchright_refs: Any | None = None
 
     @property
     def name(self) -> str:
@@ -217,19 +221,19 @@ class LinkedInTool(Tool):
             try:
                 return self._action_create_account(kwargs)
             except Exception as exc:
-                return json.dumps({"error": str(exc)})
+                return json.dumps({"error": scrub_secrets(str(exc))})
         if action == "login":
             try:
                 return self._action_login(kwargs)
             except Exception as exc:
-                return json.dumps({"error": str(exc)})
+                return json.dumps({"error": scrub_secrets(str(exc))})
         try:
             handler = getattr(self, f"_action_{action}", None)
             if handler is None:
                 return json.dumps({"error": f"Unknown action: {action}"})
             return handler(kwargs)
         except Exception as exc:
-            return json.dumps({"error": str(exc)})
+            return json.dumps({"error": scrub_secrets(str(exc))})
 
     # ------------------------------------------------------------------
     # Account resolution
@@ -280,6 +284,21 @@ class LinkedInTool(Tool):
             time.sleep(self._action_delay - elapsed)
         self._last_action_time = time.time()
 
+    def _cleanup_patchright(self) -> None:
+        """Close patchright browser and playwright instance if active."""
+        if self._patchright_refs is None:
+            return
+        pw, browser_or_context = self._patchright_refs
+        try:
+            browser_or_context.close()
+        except Exception:
+            pass
+        try:
+            pw.stop()
+        except Exception:
+            pass
+        self._patchright_refs = None
+
     @staticmethod
     def _ensure_xvfb() -> None:
         """Start a virtual X display if none is running (needed for non-headless)."""
@@ -297,6 +316,35 @@ class LinkedInTool(Tool):
         except FileNotFoundError:
             pass
 
+    def _launch_patchright_browser(self, account_name: str | None = None) -> tuple[Any, str]:
+        """Launch stealth browser via patchright, return (refs, cdp_url)."""
+        from patchright.sync_api import sync_playwright
+
+        profile_dir = None
+        if account_name:
+            profile_dir = str(Path(self._browser_profiles_dir) / account_name)
+            Path(profile_dir).mkdir(parents=True, exist_ok=True)
+
+        pw = sync_playwright().start()
+        launch_kwargs: dict[str, Any] = {
+            "headless": False,
+            "args": [
+                "--remote-debugging-port=9222",
+                "--disable-infobars",
+                "--window-size=1920,1080",
+            ],
+        }
+
+        if profile_dir:
+            context = pw.chromium.launch_persistent_context(
+                profile_dir,
+                **launch_kwargs,
+            )
+            return (pw, context), "http://127.0.0.1:9222"
+
+        browser = pw.chromium.launch(**launch_kwargs)
+        return (pw, browser), "http://127.0.0.1:9222"
+
     def _build_browser_session(self, account_name: str | None = None) -> Any:
         """Build a BrowserSession — cloud if API key is set, stealth local otherwise."""
         from browser_use import BrowserSession
@@ -312,7 +360,13 @@ class LinkedInTool(Tool):
                 cloud_proxy_country_code="de",
             )
 
-        # Local mode: Chromium + Xvfb + stealth flags + persistent profile
+        # Patchright stealth mode: patched Chromium via CDP
+        if self._browser_stealth_mode == "patchright":
+            patchright_refs, cdp_url = self._launch_patchright_browser(account_name)
+            self._patchright_refs = patchright_refs
+            return BrowserSession(cdp_url=cdp_url)
+
+        # Default: Chromium + Xvfb + stealth flags + persistent profile
         self._ensure_xvfb()
         from browser_use import BrowserProfile
         profile_kwargs: dict[str, Any] = {
@@ -383,12 +437,22 @@ class LinkedInTool(Tool):
                 await browser.stop()
             elif hasattr(browser, 'close'):
                 await browser.close()
+            self._cleanup_patchright()
 
         return str(result)
 
     def _exec_browser(self, task: BrowserTask, account_name: str | None = None) -> str:
         self._enforce_delay()
-        return asyncio.run(self._run_browser_task(task, account_name))
+        try:
+            loop = asyncio.get_running_loop()
+            # Event loop already running, use run_coroutine_threadsafe
+            future = loop.run_coroutine_threadsafe(
+                self._run_browser_task(task, account_name), loop
+            )
+            return future.result(timeout=300)
+        except RuntimeError:
+            # No running event loop, use asyncio.run
+            return asyncio.run(self._run_browser_task(task, account_name))
 
     # ------------------------------------------------------------------
     # Feed interactions

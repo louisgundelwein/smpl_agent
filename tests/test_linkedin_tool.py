@@ -472,3 +472,116 @@ class TestSessionPersistence:
             # by checking asyncio.run received a coroutine from _run_browser_task
             # with the correct account_name parameter
             assert mock_run.called
+
+
+class TestPatchrightStealth:
+    """Tests for patchright stealth browser mode."""
+
+    @pytest.fixture
+    def patchright_tool(self, mock_store, mock_knowledge, mock_adapter, mock_email_store, tmp_path):
+        return LinkedInTool(
+            store=mock_store,
+            knowledge=mock_knowledge,
+            adapter=mock_adapter,
+            openai_api_key="test-key",
+            openai_model="gpt-4o",
+            openai_base_url=None,
+            timeout=60,
+            action_delay=0,
+            browser_profiles_dir=str(tmp_path / "profiles"),
+            email_store=mock_email_store,
+            browser_stealth_mode="patchright",
+        )
+
+    def test_default_mode_does_not_use_patchright(self, tool):
+        """Default stealth mode should not set patchright refs."""
+        assert tool._browser_stealth_mode == "default"
+        assert tool._patchright_refs is None
+
+    def test_patchright_mode_stored(self, patchright_tool):
+        """Patchright mode should be stored correctly."""
+        assert patchright_tool._browser_stealth_mode == "patchright"
+
+    def test_build_browser_session_patchright_calls_launch(self, patchright_tool):
+        """Patchright mode should call _launch_patchright_browser and return CDP session."""
+        mock_refs = (MagicMock(), MagicMock())
+        cdp_url = "http://127.0.0.1:9222"
+
+        with patch.object(patchright_tool, "_launch_patchright_browser", return_value=(mock_refs, cdp_url)) as mock_launch, \
+             patch("src.tools.linkedin.BrowserSession", create=True) as mock_session_cls:
+            # We need to mock the import inside the method
+            import sys
+            mock_browser_use = MagicMock()
+            mock_session = MagicMock()
+            mock_browser_use.BrowserSession.return_value = mock_session
+            with patch.dict(sys.modules, {"browser_use": mock_browser_use}):
+                result = patchright_tool._build_browser_session(account_name="test-acct")
+
+            mock_launch.assert_called_once_with("test-acct")
+            assert patchright_tool._patchright_refs is mock_refs
+            mock_browser_use.BrowserSession.assert_called_once_with(cdp_url=cdp_url)
+
+    def test_launch_patchright_with_profile(self, patchright_tool, tmp_path):
+        """Patchright launch should use persistent context when account_name given."""
+        mock_pw_instance = MagicMock()
+        mock_context = MagicMock()
+        mock_pw_instance.chromium.launch_persistent_context.return_value = mock_context
+
+        with patch("patchright.sync_api.sync_playwright") as mock_sync_pw:
+            mock_sync_pw.return_value.start.return_value = mock_pw_instance
+            refs, cdp_url = patchright_tool._launch_patchright_browser(account_name="myaccount")
+
+        assert cdp_url == "http://127.0.0.1:9222"
+        pw, ctx = refs
+        assert pw is mock_pw_instance
+        assert ctx is mock_context
+        mock_pw_instance.chromium.launch_persistent_context.assert_called_once()
+        call_args = mock_pw_instance.chromium.launch_persistent_context.call_args
+        profile_dir = call_args[0][0]
+        assert "myaccount" in profile_dir
+
+    def test_launch_patchright_without_profile(self, patchright_tool):
+        """Patchright launch without account_name should use regular launch."""
+        mock_pw_instance = MagicMock()
+        mock_browser = MagicMock()
+        mock_pw_instance.chromium.launch.return_value = mock_browser
+
+        with patch("patchright.sync_api.sync_playwright") as mock_sync_pw:
+            mock_sync_pw.return_value.start.return_value = mock_pw_instance
+            refs, cdp_url = patchright_tool._launch_patchright_browser(account_name=None)
+
+        assert cdp_url == "http://127.0.0.1:9222"
+        pw, br = refs
+        assert pw is mock_pw_instance
+        assert br is mock_browser
+        mock_pw_instance.chromium.launch.assert_called_once()
+
+    def test_cleanup_patchright(self, patchright_tool):
+        """Cleanup should close browser and stop playwright."""
+        mock_pw = MagicMock()
+        mock_browser = MagicMock()
+        patchright_tool._patchright_refs = (mock_pw, mock_browser)
+
+        patchright_tool._cleanup_patchright()
+
+        mock_browser.close.assert_called_once()
+        mock_pw.stop.assert_called_once()
+        assert patchright_tool._patchright_refs is None
+
+    def test_cleanup_patchright_noop_when_none(self, patchright_tool):
+        """Cleanup should be a no-op when no patchright refs exist."""
+        patchright_tool._patchright_refs = None
+        patchright_tool._cleanup_patchright()  # should not raise
+        assert patchright_tool._patchright_refs is None
+
+    def test_cleanup_patchright_handles_errors(self, patchright_tool):
+        """Cleanup should swallow exceptions from close/stop."""
+        mock_pw = MagicMock()
+        mock_browser = MagicMock()
+        mock_browser.close.side_effect = RuntimeError("already closed")
+        mock_pw.stop.side_effect = RuntimeError("already stopped")
+        patchright_tool._patchright_refs = (mock_pw, mock_browser)
+
+        patchright_tool._cleanup_patchright()  # should not raise
+
+        assert patchright_tool._patchright_refs is None
