@@ -27,6 +27,7 @@ class Config:
     shell_max_output: int
     context_max_tokens: int
     context_preserve_recent: int
+    max_message_content: int
     codex_timeout: int
     codex_max_output: int
     github_token: str | None
@@ -72,6 +73,8 @@ class Config:
             raise ValueError("SHELL_COMMAND_TIMEOUT must be > 0")
         if self.context_max_tokens <= 0:
             raise ValueError("CONTEXT_MAX_TOKENS must be > 0")
+        if self.max_message_content <= 0:
+            raise ValueError("MAX_MESSAGE_CONTENT must be > 0")
         if self.codex_timeout <= 0:
             raise ValueError("CODEX_TIMEOUT must be > 0")
         if self.max_tool_rounds <= 0:
@@ -135,6 +138,7 @@ class Config:
         shell_max_output = int(os.getenv("SHELL_MAX_OUTPUT", "50000"))
         context_max_tokens = int(os.getenv("CONTEXT_MAX_TOKENS", "100000"))
         context_preserve_recent = int(os.getenv("CONTEXT_PRESERVE_RECENT", "10"))
+        max_message_content = int(os.getenv("MAX_MESSAGE_CONTENT", "30000"))
         codex_timeout = int(os.getenv("CODEX_TIMEOUT", "300"))
         codex_max_output = int(os.getenv("CODEX_MAX_OUTPUT", "50000"))
         github_token = os.getenv("GITHUB_TOKEN") or None
@@ -197,6 +201,7 @@ class Config:
             shell_max_output=shell_max_output,
             context_max_tokens=context_max_tokens,
             context_preserve_recent=context_preserve_recent,
+            max_message_content=max_message_content,
             codex_timeout=codex_timeout,
             codex_max_output=codex_max_output,
             github_token=github_token,

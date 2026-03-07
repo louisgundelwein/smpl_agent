@@ -2,7 +2,7 @@
 
 from unittest.mock import MagicMock, patch
 
-from src.llm import LLMClient
+from src.llm import LLMClient, _MAX_CONTENT_CHARS
 
 
 # --- Sanitize tests ---
@@ -50,6 +50,23 @@ def test_sanitize_adds_content_to_all_roles():
     result = LLMClient._sanitize_messages(msgs)
     assert result[0]["content"] == ""
     assert result[1]["content"] == ""
+
+
+def test_sanitize_truncates_oversized_content():
+    """Messages with content exceeding _MAX_CONTENT_CHARS are truncated."""
+    huge = "x" * (_MAX_CONTENT_CHARS + 10_000)
+    msgs = [{"role": "tool", "content": huge, "tool_call_id": "1", "name": "shell"}]
+    result = LLMClient._sanitize_messages(msgs)
+    assert len(result[0]["content"]) < len(huge)
+    assert "...[truncated]..." in result[0]["content"]
+
+
+def test_sanitize_preserves_small_content():
+    """Messages under the limit are not truncated."""
+    small = "x" * 100
+    msgs = [{"role": "user", "content": small}]
+    result = LLMClient._sanitize_messages(msgs)
+    assert result[0]["content"] == small
 
 
 # --- Existing tests ---

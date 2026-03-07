@@ -314,6 +314,7 @@ def create_agent(
         history=history,
         max_tool_rounds=config.max_tool_rounds,
         max_continuations=config.max_continuations,
+        max_message_content=config.max_message_content,
         emitter=emitter,
         subagent_manager=subagent_manager,
         auto_memory=auto_memory,

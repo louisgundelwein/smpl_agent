@@ -813,6 +813,44 @@ def test_max_continuations_cap(registry_with_dummy):
     assert mock_llm.chat.call_count == 6
 
 
+def test_tool_result_truncated_when_oversized(registry_with_dummy):
+    """Tool results exceeding max_message_content are truncated before appending."""
+    mock_llm = MagicMock()
+
+    # Register a tool that returns a huge result
+    big_tool = MagicMock()
+    big_tool.name = "big"
+    big_tool.schema = {"type": "function", "function": {"name": "big"}}
+    big_tool.execute.return_value = "A" * 100_000
+
+    registry = ToolRegistry()
+    registry._tools["big"] = big_tool
+
+    tc = _make_tool_call("call_1", "big", {})
+    tool_msg = _make_message(tool_calls=[tc])
+    final_msg = _make_message(content="Done.")
+
+    mock_llm.chat.side_effect = [
+        _make_response(tool_msg),
+        _make_response(final_msg),
+    ]
+
+    agent = Agent(
+        llm=mock_llm, registry=registry,
+        max_continuations=0, max_message_content=5000,
+    )
+    agent.run("test")
+
+    tool_messages = [
+        m for m in agent.messages
+        if isinstance(m, dict) and m.get("role") == "tool"
+    ]
+    assert len(tool_messages) == 1
+    # The tool result should be truncated, not the full 100k
+    assert len(tool_messages[0]["content"]) < 100_000
+    assert "...[truncated]..." in tool_messages[0]["content"]
+
+
 def test_llm_error_rolls_back_messages(registry_with_dummy):
     """When the LLM call raises, messages added during the round are removed."""
     mock_llm = MagicMock()

@@ -6,7 +6,7 @@ from typing import Any
 
 from src.auto_memory import AutoMemory
 from src.auto_recall import AutoRecall
-from src.context import ContextManager
+from src.context import ContextManager, truncate_text
 from src.history import ConversationHistory
 from src.events import (
     ContextCompressedEvent,
@@ -37,6 +37,7 @@ SYSTEM_PROMPT = (
 
 MAX_TOOL_ROUNDS = 10
 MAX_CONTINUATIONS = 20
+MAX_MESSAGE_CONTENT = 30_000
 
 CONTINUATION_PROMPT = (
     "[Continue with the next step. Use your tools to take action. "
@@ -65,6 +66,7 @@ class Agent:
         system_prompt: str = SYSTEM_PROMPT,
         max_tool_rounds: int = MAX_TOOL_ROUNDS,
         max_continuations: int = MAX_CONTINUATIONS,
+        max_message_content: int = MAX_MESSAGE_CONTENT,
         emitter: EventEmitter | None = None,
         context_manager: ContextManager | None = None,
         history: ConversationHistory | None = None,
@@ -76,6 +78,7 @@ class Agent:
         self._registry = registry
         self._max_tool_rounds = max_tool_rounds
         self._max_continuations = max_continuations
+        self._max_message_content = max_message_content
         self._emitter = emitter or EventEmitter()
         self._context_manager = context_manager
         self._history = history
@@ -303,7 +306,9 @@ class Agent:
                         "role": "tool",
                         "tool_call_id": tool_call.id,
                         "name": func_name,
-                        "content": result,
+                        "content": truncate_text(
+                            result, max_len=self._max_message_content
+                        ),
                     }
                 )
 
