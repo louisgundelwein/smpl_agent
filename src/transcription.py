@@ -10,9 +10,7 @@ logger = logging.getLogger(__name__)
 
 # pip package name → import name for all transcription dependencies.
 _REQUIRED_PACKAGES: list[tuple[str, str]] = [
-    ("torch", "torch"),
-    ("transformers", "transformers"),
-    ("accelerate", "accelerate"),
+    ("faster-whisper", "faster_whisper"),
     ("imageio-ffmpeg", "imageio_ffmpeg"),
 ]
 
@@ -116,50 +114,69 @@ def _decode_audio(audio_bytes: bytes) -> dict[str, Any]:
     return {"raw": audio, "sampling_rate": 16000}
 
 
-class Transcriber:
-    """Lazy-loading Whisper transcription.
+def _normalize_model_name(model_name: str) -> str:
+    """Map HuggingFace-style model names to faster-whisper short names.
 
-    The model is downloaded from HuggingFace Hub and loaded into memory
-    on the first call to transcribe(). Dependencies (torch, transformers,
-    accelerate, imageio-ffmpeg) are auto-installed via pip if not present.
+    Examples:
+        ``"openai/whisper-large-v3-turbo"`` → ``"large-v3-turbo"``
+        ``"openai/whisper-small"`` → ``"small"``
+        ``"large-v3"`` → ``"large-v3"`` (pass-through)
+    """
+    # Strip HuggingFace org/whisper- prefix if present.
+    if "/" in model_name:
+        model_name = model_name.split("/", 1)[1]
+    if model_name.startswith("whisper-"):
+        model_name = model_name[len("whisper-"):]
+    return model_name
+
+
+class Transcriber:
+    """Lazy-loading Whisper transcription using faster-whisper.
+
+    The model is downloaded and loaded into memory on the first call
+    to transcribe(). Dependencies (faster-whisper, imageio-ffmpeg) are
+    auto-installed via pip if not present.
     """
 
     def __init__(self, model_name: str = "openai/whisper-large-v3-turbo") -> None:
         self._model_name = model_name
-        self._pipeline: Any = None  # transformers.Pipeline, lazily created
+        self._model: Any = None  # faster_whisper.WhisperModel, lazily created
 
-    def _load_pipeline(self) -> Any:
-        """Ensure dependencies exist, then load the ASR pipeline."""
-        if self._pipeline is not None:
-            return self._pipeline
+    def _load_model(self) -> Any:
+        """Ensure dependencies exist, then load the WhisperModel."""
+        if self._model is not None:
+            return self._model
 
         _ensure_dependencies()
 
-        print(f"  [transcription] loading model: {self._model_name}")
-        logger.info("Loading Whisper model: %s", self._model_name)
+        short_name = _normalize_model_name(self._model_name)
+        print(f"  [transcription] loading model: {short_name}")
+        logger.info("Loading Whisper model: %s", short_name)
 
-        import torch
-        from transformers import pipeline
+        from faster_whisper import WhisperModel
 
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        dtype = torch.float16 if device == "cuda" else torch.float32
+        try:
+            import torch
+            cuda_available = torch.cuda.is_available()
+        except ImportError:
+            cuda_available = False
 
-        self._pipeline = pipeline(
-            "automatic-speech-recognition",
-            model=self._model_name,
-            device=device,
-            dtype=dtype,
-        )
+        if cuda_available:
+            device, compute_type = "cuda", "float16"
+        else:
+            device, compute_type = "cpu", "int8"
+
+        self._model = WhisperModel(short_name, device=device, compute_type=compute_type)
 
         print(f"  [transcription] model loaded (device={device})")
         logger.info("Whisper model loaded on %s", device)
-        return self._pipeline
+        return self._model
 
     def transcribe(self, audio_bytes: bytes) -> str:
         """Transcribe audio bytes (OGG/Opus, MP3, WAV, FLAC) to text.
 
         Decodes audio to a numpy array via ffmpeg, then runs it through
-        the Whisper pipeline.
+        the faster-whisper model.
 
         Args:
             audio_bytes: Raw audio file content.
@@ -170,8 +187,8 @@ class Transcriber:
         Raises:
             RuntimeError: If dependencies cannot be installed or model fails.
         """
-        pipe = self._load_pipeline()
+        model = self._load_model()
         audio_input = _decode_audio(audio_bytes)
-        result = pipe(audio_input, return_timestamps=True)
-        text = result.get("text", "").strip() if isinstance(result, dict) else str(result).strip()
+        segments, _info = model.transcribe(audio_input["raw"])
+        text = " ".join(seg.text for seg in segments).strip()
         return text
